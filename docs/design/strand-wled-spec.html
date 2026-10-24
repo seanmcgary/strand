@@ -1,0 +1,3927 @@
+<title>Strand for WLED</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<!--
+  Strand for WLED: device setup & settings, interactive design spec (round 1)
+
+  One file, no build step: HTML + Tailwind (Play CDN) + vanilla JS. Open it in a browser.
+  - Theme: shadcn/ui CSS variables in the <style> block, mapped to Tailwind colors in tailwind.config
+    exactly as a shadcn project does it (background, card, primary, muted, border, ring…).
+  - Components: the "SHADCN/UI CLASS STRINGS" block holds the Tailwind classes each shadcn component
+    renders (button variants and sizes, Card, Badge, Input, Switch, Slider, Tabs, Dialog, Sheet…).
+    Markup uses those strings, so styles transfer 1:1 into a shadcn + Tailwind codebase.
+  - Screens: one render function per screen/section, returning HTML for the current state.
+  - Mock app server: `api` (latency, offline devices, PIN lock, reboot, Wi-Fi reconnect).
+  - Prototype controls (bottom-left) force scenarios for review; they are not part of the product.
+  Dependencies: Tailwind Play CDN 3.4.17 and morphdom (patches the DOM between renders).
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap">
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<script>
+  // shadcn/ui's tailwind.config, plus the app's semantic colors (success, warning, danger, glow).
+  tailwind.config = {
+    theme: {
+      extend: {
+        fontFamily: {
+          sans: ["Geist", "ui-sans-serif", "system-ui", "-apple-system", "Segoe UI", "sans-serif"],
+          mono: ["Geist Mono", "ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
+        },
+        colors: {
+          border: "hsl(var(--border))",
+          input: "hsl(var(--input))",
+          ring: "hsl(var(--ring))",
+          background: "hsl(var(--background))",
+          foreground: "hsl(var(--foreground))",
+          primary: { DEFAULT: "hsl(var(--primary))", foreground: "hsl(var(--primary-foreground))" },
+          secondary: { DEFAULT: "hsl(var(--secondary))", foreground: "hsl(var(--foreground))" },
+          destructive: { DEFAULT: "hsl(var(--destructive))", foreground: "hsl(0 0% 100%)" },
+          muted: { DEFAULT: "hsl(var(--muted))", foreground: "hsl(var(--muted-foreground))" },
+          accent: { DEFAULT: "hsl(var(--accent))", foreground: "hsl(var(--foreground))" },
+          popover: { DEFAULT: "hsl(var(--popover))", foreground: "hsl(var(--foreground))" },
+          card: { DEFAULT: "hsl(var(--card))", foreground: "hsl(var(--foreground))" },
+          success: "hsl(var(--success))",
+          warning: { DEFAULT: "hsl(var(--warning))", muted: "hsl(var(--warning-muted))" },
+          danger: "hsl(var(--danger))",
+          glow: "hsl(var(--glow))",
+        },
+        borderColor: { DEFAULT: "hsl(var(--border))" },
+        borderRadius: { lg: "var(--radius)", md: "calc(var(--radius) - 2px)", sm: "calc(var(--radius) - 4px)" },
+        keyframes: {
+          "fade-in": { from: { opacity: "0" } },
+          "zoom-in": { from: { opacity: "0", transform: "scale(.96)" } },
+          "dialog-in": { from: { opacity: "0", transform: "translate(-50%,-48%) scale(.96)" }, to: { opacity: "1", transform: "translate(-50%,-50%)" } },
+          "slide-up": { from: { transform: "translateY(100%)" } },
+          rise: { from: { opacity: "0", transform: "translateY(6px)" } },
+        },
+        animation: {
+          "fade-in": "fade-in .15s ease-out",
+          "zoom-in": "zoom-in .15s ease-out",
+          "dialog-in": "dialog-in .18s ease-out",
+          "slide-up": "slide-up .25s ease-out",
+          rise: "rise .2s ease-out",
+        },
+      },
+    },
+  };
+</script>
+<style>
+/* =============================================================================
+   DESIGN TOKENS
+   Dark-first: bare :root holds the dark palette. Light values apply when the OS
+   prefers light (and nobody forced dark) or when data-theme="light" is set.
+   Colors are HSL triplets so they can be used with alpha: hsl(var(--x) / .5).
+   Mapping to shadcn/ui token names is 1:1 (background, card, primary, muted…).
+   ============================================================================= */
+:root {
+  --background: 30 6% 6.5%;
+  --foreground: 40 18% 95%;
+  --card: 30 5% 9%;
+  --popover: 30 5% 10%;
+  --primary: 38 96% 56%;            /* amber: power, brightness, primary actions */
+  --primary-foreground: 30 40% 7%;
+  --secondary: 30 5% 15%;
+  --muted: 30 5% 14%;
+  --muted-foreground: 34 7% 64%;
+  --accent: 30 5% 16%;              /* hover / selected row background */
+  --destructive: 0 68% 48%;
+  --border: 30 5% 18%;
+  --input: 30 5% 22%;
+  --ring: 38 96% 56%;
+  --success: 145 58% 50%;
+  --warning: 48 94% 60%;
+  --warning-muted: 45 60% 14%;
+  --danger: 0 86% 68%;
+  --glow: 40 100% 62%;              /* the "lit LED" color in the lamp glyph */
+
+  --radius: 10px;
+  --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --shadow-lg: 0 10px 30px -10px rgb(0 0 0 / .5);
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --background: 40 22% 97.5%; --foreground: 30 12% 9%; --card: 0 0% 100%; --popover: 0 0% 100%;
+    --primary: 37 95% 50%; --primary-foreground: 30 40% 7%; --secondary: 36 14% 92%; --muted: 36 14% 93%;
+    --muted-foreground: 30 6% 37%; --accent: 36 14% 92%; --destructive: 0 72% 46%; --border: 36 12% 86%;
+    --input: 36 10% 80%; --ring: 34 92% 42%; --success: 145 63% 30%; --warning: 32 92% 33%;
+    --warning-muted: 45 90% 92%; --danger: 0 72% 42%; --glow: 38 100% 50%;
+    --shadow-lg: 0 10px 30px -12px rgb(60 40 10 / .25);
+    color-scheme: light;
+  }
+}
+:root[data-theme="light"] {
+  --background: 40 22% 97.5%; --foreground: 30 12% 9%; --card: 0 0% 100%; --popover: 0 0% 100%;
+  --primary: 37 95% 50%; --primary-foreground: 30 40% 7%; --secondary: 36 14% 92%; --muted: 36 14% 93%;
+  --muted-foreground: 30 6% 37%; --accent: 36 14% 92%; --destructive: 0 72% 46%; --border: 36 12% 86%;
+  --input: 36 10% 80%; --ring: 34 92% 42%; --success: 145 63% 30%; --warning: 32 92% 33%;
+  --warning-muted: 45 90% 92%; --danger: 0 72% 42%; --glow: 38 100% 50%;
+  --shadow-lg: 0 10px 30px -12px rgb(60 40 10 / .25);
+  color-scheme: light;
+}
+
+
+/* shadcn globals: borders default to the border token; body uses the background/foreground tokens. */
+*, *::before, *::after { border-color: hsl(var(--border)); }
+body { margin: 0; background: hsl(var(--background)); color: hsl(var(--foreground)); font-family: var(--font-sans); font-size: 14px; -webkit-font-smoothing: antialiased; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 60; background: hsl(var(--background)); }
+h1, h2, h3 { text-wrap: balance; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
+</style>
+
+<div id="app"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/morphdom@2.7.4/dist/morphdom-umd.min.js"></script>
+<script>
+"use strict";
+/* =============================================================================
+   ICONS (lucide paths, ISC license)
+   ============================================================================= */
+const ICON_PATHS = {
+  "plus": '<path d="M5 12h14"/><path d="M12 5v14"/>',
+  "chevron-right": '<path d="m9 18 6-6-6-6"/>',
+  "chevron-down": '<path d="m6 9 6 6 6-6"/>',
+  "arrow-left": '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
+  "arrow-right": '<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>',
+  "arrow-left-right": '<path d="M8 3 4 7l4 4"/><path d="M4 7h16"/><path d="m16 21 4-4-4-4"/><path d="M20 17H4"/>',
+  "loader-circle": '<path d="M21 12a9 9 0 1 1-6.219-8.56"/>',
+  "rotate-cw": '<path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/>',
+  "rotate-ccw": '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
+  "search": '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  "sun": '<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>',
+  "moon": '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>',
+  "monitor": '<rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/>',
+  "lock": '<rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  "check": '<path d="M20 6 9 17l-5-5"/>',
+  "circle-check": '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
+  "info": '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+  "wifi": '<path d="M12 20h.01"/><path d="M2 8.82a15 15 0 0 1 20 0"/><path d="M5 12.859a10 10 0 0 1 14 0"/><path d="M8.5 16.429a5 5 0 0 1 7 0"/>',
+  "wifi-off": '<path d="M12 20h.01"/><path d="M8.5 16.429a5 5 0 0 1 7 0"/><path d="M5 12.859a10 10 0 0 1 5.17-2.69"/><path d="M19 12.859a10 10 0 0 0-2.007-1.523"/><path d="M2 8.82a15 15 0 0 1 4.177-2.643"/><path d="M22 8.82a15 15 0 0 0-11.288-3.764"/><path d="m2 2 20 20"/>',
+  "cable": '<path d="M17 21v-2a1 1 0 0 1-1-1v-1a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v1a1 1 0 0 1-1 1"/><path d="M19 15V6.5a1 1 0 0 0-7 0v11a1 1 0 0 1-7 0V9"/><path d="M21 21v-2h-4"/><path d="M3 5h4V3"/><path d="M7 5a1 1 0 0 1 1 1v1a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a1 1 0 0 1 1-1V3"/>',
+  "cpu": '<rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2"/><path d="M15 20v2"/><path d="M2 15h2"/><path d="M2 9h2"/><path d="M20 15h2"/><path d="M20 9h2"/><path d="M9 2v2"/><path d="M9 20v2"/>',
+  "external-link": '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
+  "lightbulb": '<path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/>',
+  "repeat-2": '<path d="m2 9 3-3 3 3"/><path d="M13 18H7a2 2 0 0 1-2-2V6"/><path d="m22 15-3 3-3-3"/><path d="M11 6h6a2 2 0 0 1 2 2v10"/>',
+  "palette": '<circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/>',
+  "layers": '<path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/>',
+  "bookmark": '<path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/>',
+  "settings-2": '<path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/>',
+  "radio": '<path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/>',
+  "radio-tower": '<path d="M4.9 16.1C1 12.2 1 5.8 4.9 1.9"/><path d="M7.8 4.7a6.14 6.14 0 0 0-.8 7.5"/><circle cx="12" cy="9" r="2"/><path d="M16.2 4.8c2 2 2.26 5.11.8 7.47"/><path d="M19.1 1.9a9.96 9.96 0 0 1 0 14.1"/><path d="M9.5 18h5"/><path d="m8 22 4-11 4 11"/>',
+  "trash-2": '<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/>',
+  "triangle-alert": '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+  "eye": '<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>',
+  "eye-off": '<path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49"/><path d="M14.084 14.158a3 3 0 0 1-4.242-4.242"/><path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143"/><path d="m2 2 20 20"/>',
+  "copy": '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
+  "clipboard-copy": '<rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M8 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/><path d="M16 4h2a2 2 0 0 1 2 2v4"/><path d="M21 14H11"/><path d="m15 10-4 4 4 4"/>',
+  "power": '<path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04"/>',
+  "flask-conical": '<path d="M10 2v7.527a2 2 0 0 1-.211.896L4.72 20.55a1 1 0 0 0 .9 1.45h12.76a1 1 0 0 0 .9-1.45l-5.069-10.127A2 2 0 0 1 14 9.527V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/>',
+  "x": '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  "refresh-cw": '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
+};
+/* =============================================================================
+   FORMATTERS: human units (A, dBm, uptime, MAC…)
+   ============================================================================= */
+function formatAmps(mA) {
+  const a = mA / 1e3;
+  const s = Number.isInteger(a * 10) ? a.toFixed(1) : String(Math.round(a * 100) / 100);
+  return `${s} A`;
+}
+function formatCurrent(mA) {
+  return `${(mA / 1e3).toFixed(1)} A`;
+}
+function briToPct(bri) {
+  return Math.max(1, Math.round(bri / 255 * 100));
+}
+function rssiQuality(rssi) {
+  if (rssi >= -50) return "Excellent";
+  if (rssi >= -62) return "Good";
+  if (rssi >= -74) return "Fair";
+  return "Weak";
+}
+function formatRssi(rssi) {
+  return `${rssi} dBm \xB7 ${rssiQuality(rssi)}`;
+}
+function rssiBars(rssi) {
+  if (rssi >= -50) return 4;
+  if (rssi >= -62) return 3;
+  if (rssi >= -74) return 2;
+  return 1;
+}
+function relativeTime(iso, now = Date.now()) {
+  const diff = Math.max(0, now - new Date(iso).getTime()) / 1e3;
+  if (diff < 45) return "just now";
+  if (diff < 3600) return `${Math.max(1, Math.round(diff / 60))}\xA0min\xA0ago`;
+  if (diff < 86400) return `${Math.round(diff / 3600)}\xA0h\xA0ago`;
+  return `${Math.round(diff / 86400)}\xA0d\xA0ago`;
+}
+function uptimeShort(sec) {
+  const d = Math.floor(sec / 86400);
+  const h = Math.floor(sec % 86400 / 3600);
+  const m = Math.floor(sec % 3600 / 60);
+  if (d > 0) return `${d} d ${h} h`;
+  if (h > 0) return `${h} h ${m} min`;
+  if (m > 0) return `${m} min`;
+  return `${Math.floor(sec)} s`;
+}
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+function uptimeLong(sec) {
+  const d = Math.floor(sec / 86400);
+  const h = Math.floor(sec % 86400 / 3600);
+  const m = Math.floor(sec % 3600 / 60);
+  const s = Math.floor(sec % 60);
+  if (d > 0) return `${plural(d, "day")}, ${plural(h, "hour")}`;
+  if (h > 0) return `${plural(h, "hour")}, ${plural(m, "minute")}`;
+  if (m > 0) return `${plural(m, "minute")}, ${plural(s, "second")}`;
+  return plural(s, "second");
+}
+function formatMac(mac) {
+  return (mac.match(/.{1,2}/g) ?? []).join(":");
+}
+function formatKB(bytes) {
+  return `${Math.round(bytes / 1024)} kB`;
+}
+function formatMB(bytes) {
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+function archLabel(arch) {
+  if (arch === "esp32") return "ESP32";
+  if (arch === "esp8266") return "ESP8266";
+  return arch;
+}
+function elapsed(sec) {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+/* =============================================================================
+   IPv4 HELPERS
+   ============================================================================= */
+const ZERO_IP = [0, 0, 0, 0];
+function ipToString(ip) {
+  return ip.join(".");
+}
+function isZeroIp(ip) {
+  return ip.every((n) => n === 0);
+}
+function parseIp(text) {
+  const parts = text.trim().split(".");
+  if (parts.length !== 4) return null;
+  const nums = parts.map((p) => /^\d{1,3}$/.test(p) ? Number(p) : NaN);
+  if (nums.some((n) => Number.isNaN(n) || n < 0 || n > 255)) return null;
+  return nums;
+}
+function isValidSubnet(ip) {
+  const bits = ip.map((n) => n.toString(2).padStart(8, "0")).join("");
+  return /^1+0*$/.test(bits);
+}
+function sameIp(a, b) {
+  return a.every((n, i) => n === b[i]);
+}
+/* =============================================================================
+   API ERROR TYPE
+   ============================================================================= */
+var __defProp = Object.defineProperty;
+var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
+class ApiError extends Error {
+  constructor(status, code, message) {
+    super(message);
+    __publicField(this, "status");
+    __publicField(this, "code");
+    this.status = status;
+    this.code = code;
+  }
+}
+/* =============================================================================
+   MOCK FIXTURES: devices on the LAN, LED types, chip limits, pins, Wi-Fi scan
+   ============================================================================= */
+const LED_TYPES = [
+  { i: 22, n: "WS281x RGB", t: "D", c: 1 },
+  { i: 30, n: "SK6812/WS2814 RGBW", t: "D", c: 3 },
+  { i: 28, n: "FW1906/WS2811 RGBCCT", t: "D", c: 7 },
+  { i: 19, n: "WS2811 White", t: "D", c: 2 },
+  { i: 21, n: "WS281x WWA", t: "D", c: 6 },
+  { i: 50, n: "WS2801 RGB", t: "2P", c: 1 },
+  { i: 51, n: "APA102 RGB", t: "2P", c: 1 },
+  { i: 40, n: "On/Off", t: "", c: 0 },
+  { i: 41, n: "PWM White", t: "A", c: 2 },
+  { i: 42, n: "PWM CCT", t: "AA", c: 6 },
+  { i: 43, n: "PWM RGB", t: "AAA", c: 1 },
+  { i: 44, n: "PWM RGBW", t: "AAAA", c: 3 },
+  { i: 45, n: "PWM RGBCCT", t: "AAAAA", c: 7 },
+  { i: 80, n: "DDP RGB network", t: "N", c: 1 }
+];
+const range = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
+const ARCH = {
+  esp32: {
+    limits: { maxLedsPerOutput: 2048, maxLeds: 16384, maxDigitalOutputs: 16, maxPwmPins: 16, ledMemoryBytes: 87040 },
+    pins: [...range(0, 5), ...range(12, 19), ...range(21, 23), ...range(25, 27), ...range(32, 39)],
+    reserved: range(6, 11),
+    inputOnly: range(34, 39),
+    boot: [0],
+    strapping: [2, 12],
+    analog: [0, 2, 4, 12, 13, 14, 15, 25, 26, 27, ...range(32, 39)]
+  },
+  esp8266: {
+    limits: { maxLedsPerOutput: 2048, maxLeds: 1536, maxDigitalOutputs: 3, maxPwmPins: 5, ledMemoryBytes: 8192 },
+    pins: [...range(0, 5), ...range(12, 16)],
+    reserved: range(6, 11),
+    inputOnly: [],
+    boot: [0],
+    strapping: [2, 15],
+    analog: []
+  },
+  "ESP32-C3": {
+    limits: { maxLedsPerOutput: 2048, maxLeds: 4096, maxDigitalOutputs: 2, maxPwmPins: 6, ledMemoryBytes: 102400 },
+    pins: [...range(0, 10), 20, 21],
+    reserved: range(11, 19),
+    inputOnly: [],
+    boot: [9],
+    strapping: [2, 8, 9],
+    analog: range(0, 4)
+  }
+};
+function capabilitiesFor(arch) {
+  const p = ARCH[arch] ?? ARCH.esp32;
+  return { ledTypes: LED_TYPES, limits: p.limits, reservedPins: p.reserved, inputOnlyPins: p.inputOnly };
+}
+function pinsFor(arch, owners) {
+  const p = ARCH[arch] ?? ARCH.esp32;
+  return p.pins.map((gpio) => {
+    let c = 0;
+    if (p.analog.includes(gpio)) c |= 2;
+    if (p.boot.includes(gpio)) c |= 8;
+    if (p.strapping.includes(gpio)) c |= 16;
+    if (p.inputOnly.includes(gpio)) c |= 32;
+    const n = owners[gpio];
+    return n ? { p: gpio, c, a: true, n } : { p: gpio, c, a: false };
+  });
+}
+const AIRWAVES = [
+  { ssid: "HomeNet", rssi: -48, channel: 6, enc: 3 },
+  { ssid: "HomeNet-IoT", rssi: -55, channel: 11, enc: 3 },
+  { ssid: "Neighbor5G", rssi: -80, channel: 36, enc: 3 },
+  { ssid: "xfinitywifi", rssi: -77, channel: 1, enc: 3 },
+  { ssid: "Cafe", rssi: -85, channel: 3, enc: 0 }
+];
+const defaultSync = () => ({
+  recv: { bri: true, col: true, fx: true, pal: true, seg: false, sb: false, grp: 1 },
+  send: { en: false, dir: true, btn: false, grp: 1 }
+});
+const dhcp = () => ({ ip: [0, 0, 0, 0], gw: [0, 0, 0, 0], sn: [255, 255, 255, 0] });
+const ap = () => ({ ssid: "WLED-AP", pskl: 8, chan: 1, hide: false, behav: 0 });
+const SEEDS = [
+  {
+    id: "4f1c2a9e-7b3d-4e10-9a51-0c6f8e2d1b01",
+    mac: "a4cf12345678",
+    name: "Backyard",
+    mdns: "wled-backyard",
+    ip: "192.168.1.42",
+    ver: "0.16.0",
+    vid: 2510180,
+    arch: "esp32",
+    clock: 240,
+    flash: 4,
+    freeheap: 145408,
+    fs: { u: 48, t: 983 },
+    rssi: -52,
+    uptimeSec: 4 * 86400 + 12 * 3600 + 17 * 60,
+    fps: 42,
+    powered: true,
+    extraPins: { 0: "Button" },
+    presets: [
+      { id: 1, name: "Warm White" },
+      { id: 2, name: "Halloween" },
+      { id: 3, name: "Christmas" },
+      { id: 4, name: "Game Day" }
+    ],
+    state: { on: true, bri: 128 },
+    config: {
+      id: { name: "Backyard", mdns: "wled-backyard" },
+      nw: { ins: [{ ssid: "HomeNet", pskl: 12, ...dhcp() }] },
+      ap: ap(),
+      def: { on: true, bri: 128, ps: 0 },
+      light: { "scale-bri": 100 },
+      hw: {
+        led: {
+          maxpwr: 5e3,
+          ins: [
+            { type: 22, pin: [16], start: 0, len: 150, order: 0, rev: false, skip: 0, ledma: 55 },
+            { type: 22, pin: [17], start: 150, len: 150, order: 0, rev: true, skip: 0, ledma: 55 }
+          ]
+        }
+      },
+      if: {
+        sync: {
+          recv: { bri: true, col: true, fx: false, pal: false, seg: false, sb: false, grp: 1 },
+          send: { en: true, dir: true, btn: false, grp: 1 }
+        }
+      }
+    }
+  },
+  {
+    id: "9d2e7f40-1a6b-4c3e-8f27-5b9a0d4c3e02",
+    mac: "bcddc2a1b2c3",
+    name: "Front Roof",
+    mdns: "wled-front-roof",
+    ip: "192.168.1.43",
+    ver: "0.15.1",
+    vid: 2412100,
+    arch: "esp8266",
+    clock: 160,
+    flash: 4,
+    freeheap: 21504,
+    fs: { u: 31, t: 1e3 },
+    rssi: -71,
+    uptimeSec: 2 * 86400 + 3 * 3600 + 41 * 60,
+    fps: 38,
+    powered: true,
+    pin: "1234",
+    presets: [
+      { id: 1, name: "Warm White" },
+      { id: 2, name: "Christmas" }
+    ],
+    state: { on: true, bri: 191 },
+    config: {
+      id: { name: "Front Roof", mdns: "wled-front-roof" },
+      nw: { ins: [{ ssid: "HomeNet", pskl: 12, ...dhcp() }] },
+      ap: ap(),
+      def: { on: true, bri: 191, ps: 1 },
+      light: { "scale-bri": 100 },
+      hw: { led: { maxpwr: 0, ins: [{ type: 30, pin: [2], start: 0, len: 300, order: 0, rev: false, skip: 0, ledma: 55 }] } },
+      if: {
+        sync: {
+          recv: { bri: true, col: true, fx: true, pal: true, seg: false, sb: false, grp: 1 },
+          send: { en: false, dir: false, btn: false, grp: 1 }
+        }
+      }
+    }
+  },
+  {
+    id: "c35b8a17-2e4f-4d9a-b6c0-7e1f2a3b4c03",
+    mac: "84f703aabbcc",
+    name: "Desk Lamp",
+    mdns: "wled-desk-lamp",
+    ip: "192.168.1.51",
+    ver: "0.16.0",
+    vid: 2510180,
+    arch: "ESP32-C3",
+    clock: 160,
+    flash: 4,
+    freeheap: 198656,
+    fs: { u: 22, t: 983 },
+    rssi: -63,
+    uptimeSec: 9 * 3600,
+    fps: 42,
+    powered: false,
+    lastSeenAgoSec: 3 * 3600 + 4 * 60,
+    presets: [],
+    state: { on: false, bri: 255 },
+    config: {
+      id: { name: "Desk Lamp", mdns: "wled-desk-lamp" },
+      nw: { ins: [{ ssid: "HomeNet", pskl: 12, ...dhcp() }] },
+      ap: ap(),
+      def: { on: false, bri: 255, ps: 0 },
+      light: { "scale-bri": 100 },
+      hw: { led: { maxpwr: 0, ins: [{ type: 45, pin: [4, 5, 6, 7, 10], start: 0, len: 1, order: 0, rev: false, skip: 0, ledma: 55 }] } },
+      if: {
+        sync: {
+          recv: { bri: true, col: true, fx: true, pal: true, seg: false, sb: false, grp: 2 },
+          send: { en: false, dir: true, btn: false, grp: 2 }
+        }
+      }
+    }
+  },
+  {
+    id: null,
+    mac: "c8c9a3112233",
+    name: "Garage",
+    mdns: "wled-garage",
+    ip: "192.168.1.57",
+    ver: "0.16.0",
+    vid: 2510180,
+    arch: "esp32",
+    clock: 240,
+    flash: 4,
+    freeheap: 151552,
+    psram: 4093e3,
+    fs: { u: 12, t: 983 },
+    rssi: -60,
+    uptimeSec: 26 * 3600,
+    fps: 42,
+    powered: true,
+    presets: [],
+    state: { on: false, bri: 128 },
+    config: {
+      id: { name: "Garage", mdns: "wled-garage" },
+      nw: { ins: [{ ssid: "HomeNet", pskl: 12, ...dhcp() }] },
+      ap: ap(),
+      def: { on: false, bri: 128, ps: 0 },
+      light: { "scale-bri": 100 },
+      hw: { led: { maxpwr: 850, ins: [{ type: 22, pin: [16], start: 0, len: 60, order: 0, rev: false, skip: 0, ledma: 55 }] } },
+      if: { sync: defaultSync() }
+    }
+  },
+  {
+    id: null,
+    mac: "e8db84778899",
+    name: "WLED",
+    mdns: "wled-778899",
+    ip: "192.168.1.88",
+    ver: "0.14.4",
+    vid: 2405180,
+    arch: "esp8266",
+    clock: 80,
+    flash: 4,
+    freeheap: 24576,
+    fs: { u: 8, t: 1e3 },
+    rssi: -66,
+    uptimeSec: 41 * 60,
+    fps: 40,
+    powered: true,
+    presets: [],
+    state: { on: true, bri: 128 },
+    config: {
+      id: { name: "WLED", mdns: "wled-778899" },
+      nw: { ins: [{ ssid: "HomeNet", pskl: 12, ...dhcp() }] },
+      ap: ap(),
+      def: { on: true, bri: 128, ps: 0 },
+      light: { "scale-bri": 100 },
+      hw: { led: { maxpwr: 850, ins: [{ type: 22, pin: [2], start: 0, len: 30, order: 0, rev: false, skip: 0, ledma: 55 }] } },
+      if: { sync: defaultSync() }
+    }
+  }
+];
+const INITIAL_REGISTRY = ["a4cf12345678", "bcddc2a1b2c3", "84f703aabbcc"];
+const LEASES = {
+  HomeNet: {
+    a4cf12345678: "192.168.1.42",
+    bcddc2a1b2c3: "192.168.1.43",
+    "84f703aabbcc": "192.168.1.51",
+    c8c9a3112233: "192.168.1.57",
+    e8db84778899: "192.168.1.88"
+  },
+  "HomeNet-IoT": {
+    a4cf12345678: "192.168.1.61",
+    bcddc2a1b2c3: "192.168.1.62",
+    "84f703aabbcc": "192.168.1.63",
+    c8c9a3112233: "192.168.1.64",
+    e8db84778899: "192.168.1.65"
+  }
+};
+/* =============================================================================
+   MOCK APP SERVER (swap for fetch() in the real build)
+   ============================================================================= */
+/*
+  Each function maps to one app-server endpoint. All add 300–800 ms latency and
+  throw ApiError on failure (offline device → 504 device_offline, locked → 401 pin_required).
+
+    GET    /api/devices                       api.listDevices()
+    POST   /api/devices        { host }       api.addDevice(host)
+    POST   /api/devices/probe  { host }       api.probeHost(host)          (addition: probe before adding)
+    DELETE /api/devices/:id                   api.removeDevice(id)
+    GET    /api/discovery                     api.discover()
+    GET    /api/devices/:id/info              api.getInfo(id)
+    GET    /api/devices/:id/state             api.getState(id)
+    PATCH  /api/devices/:id/state             api.patchState(id, partial)
+    GET    /api/devices/:id/config            api.getConfig(id)
+    PATCH  /api/devices/:id/config            api.patchConfig(id, partialSection)
+    POST   /api/devices/:id/unlock { pin }    api.unlock(id, pin)
+    GET    /api/devices/:id/capabilities      api.getCapabilities(id)
+    GET    /api/devices/:id/pins              api.getPins(id)
+    POST   /api/devices/:id/networks/scan     api.scanNetworks(id)         (2–4 s)
+    GET    /api/devices/:id/presets           api.getPresets(id)
+    POST   /api/devices/:id/reboot            api.reboot(id)               (offline ~10 s)
+    GET    /api/devices/:id/pending-reboot    getPendingReboot(id)         (addition: changes waiting for a reboot)
+
+  Behaviour: Wi-Fi/AP changes drop the device for 6–10 s, then it rejoins the strongest saved
+  network on the air (HomeNet-IoT → 192.168.1.61); 5 GHz networks can't be joined. Hostname and
+  static IP apply on reboot. Front Roof's PIN is 1234; unlocking lasts 15 minutes.
+  `prototype` drives the reviewer panel (force offline, PIN lock, live data, failed reconnect…).
+*/
+const clone = (v) => structuredClone(v);
+const rand = (a, b) => a + Math.random() * (b - a);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const latency = () => sleep(rand(300, 800));
+const ipStr = (ip) => ip.join(".");
+const zero = (ip) => ip.every((n) => n === 0);
+let sims = [];
+let registry = [];
+let flags = { failNextWifi: false, discoveryEmpty: false };
+const listeners = new Set();
+function emit() {
+  listeners.forEach((l) => l());
+}
+function uuid() {
+  return crypto.randomUUID ? crypto.randomUUID() : `dev-${Math.random().toString(16).slice(2)}`;
+}
+function seedAll() {
+  sims.forEach((s) => s.timers.forEach((t) => clearTimeout(t)));
+  const now = Date.now();
+  sims = SEEDS.map((seed) => {
+    const config = clone(seed.config);
+    return {
+      id: seed.id,
+      seed,
+      host: `${seed.mdns}.local`,
+      powered: seed.powered,
+      bootUntil: 0,
+      wifiDownUntil: 0,
+      failReconnect: false,
+      ip: seed.ip,
+      ssid: "HomeNet",
+      upSince: now - seed.uptimeSec * 1e3,
+      lastSeen: seed.powered ? now : now - (seed.lastSeenAgoSec ?? 600) * 1e3,
+      unlockedUntil: 0,
+      pin: seed.pin,
+      live: false,
+      state: { on: seed.state.on, bri: seed.state.bri, udpn: { send: config.if.sync.send.en, recv: config.if.sync.recv.grp > 0 } },
+      config,
+      bootConfig: clone(config),
+      presets: clone(seed.presets),
+      timers: []
+    };
+  });
+  registry = [...INITIAL_REGISTRY];
+  flags = { failNextWifi: false, discoveryEmpty: false };
+}
+seedAll();
+function reachable(s, now = Date.now()) {
+  return s.powered && now >= s.bootUntil && now >= s.wifiDownUntil;
+}
+function bySim(id) {
+  const s = sims.find((x) => x.id === id && registry.includes(x.seed.mac));
+  if (!s) throw new ApiError(404, "not_found", "This device isn't in the app any more.");
+  return s;
+}
+function online(id) {
+  const s = bySim(id);
+  if (!reachable(s)) {
+    throw new ApiError(504, "device_offline", `${s.config.id.name} isn't responding.`);
+  }
+  s.lastSeen = Date.now();
+  return s;
+}
+function pinLocked(s) {
+  return !!s.pin && Date.now() > s.unlockedUntil;
+}
+function toDevice(s) {
+  const ok = reachable(s);
+  return {
+    id: s.id,
+    name: s.config.id.name,
+    host: s.host,
+    lastIp: s.ip,
+    mac: s.seed.mac,
+    online: ok,
+    lastSeen: new Date(ok ? Date.now() : s.lastSeen).toISOString(),
+    pinLocked: pinLocked(s)
+  };
+}
+function goDark(s) {
+  s.lastSeen = Date.now();
+}
+function schedule(s, at, fn) {
+  const t = window.setTimeout(() => {
+    fn();
+    emit();
+  }, Math.max(0, at - Date.now()) + 20);
+  s.timers.push(t);
+}
+function connect(s) {
+  const candidates = s.config.nw.ins.map((e2) => ({ e: e2, air: AIRWAVES.find((a) => a.ssid === e2.ssid && a.channel <= 14) })).filter((c) => c.air).sort((a, b) => b.air.rssi - a.air.rssi);
+  if (!candidates.length) return false;
+  const { e } = candidates[0];
+  const bootEntry = s.bootConfig.nw.ins.find((b) => b.ssid === e.ssid);
+  s.ssid = e.ssid;
+  if (bootEntry && !zero(bootEntry.ip)) s.ip = ipStr(bootEntry.ip);
+  else s.ip = LEASES[e.ssid]?.[s.seed.mac] ?? `192.168.1.${100 + Math.floor(Math.random() * 100)}`;
+  return true;
+}
+function estimateCurrent(s) {
+  const max = s.config.hw.led.maxpwr;
+  if (max === 0) return 0;
+  if (!s.state.on) return 40;
+  const total = 100 + s.config.hw.led.ins.reduce((t, o) => t + o.len * (o.ledma === 255 ? 12 : o.ledma), 0);
+  const scale = s.config.light["scale-bri"] / 100;
+  return Math.round(Math.min(max, total * (s.state.bri / 255) * scale * 0.22));
+}
+function info(s) {
+  const air = AIRWAVES.find((a) => a.ssid === s.ssid);
+  const rssi = s.ssid === "HomeNet" || !air ? s.seed.rssi : air.rssi - 4;
+  const ledCount = s.config.hw.led.ins.reduce((t, o) => t + o.len, 0);
+  return {
+    ver: s.seed.ver,
+    vid: s.seed.vid,
+    name: s.config.id.name,
+    mac: s.seed.mac,
+    ip: s.ip,
+    arch: s.seed.arch,
+    clock: s.seed.clock,
+    flash: s.seed.flash,
+    uptime: Math.floor((Date.now() - s.upSince) / 1e3),
+    freeheap: s.seed.freeheap - Math.floor(Math.random() * 2048),
+    ...s.seed.psram ? { psram: s.seed.psram } : {},
+    fs: clone(s.seed.fs),
+    wifi: {
+      rssi,
+      signal: Math.max(0, Math.min(100, 2 * (rssi + 100))),
+      channel: air?.channel ?? 6,
+      band: "2.4GHz",
+      ap: false,
+      ssid: s.ssid ?? void 0
+    },
+    leds: {
+      count: ledCount,
+      fps: s.state.on ? s.seed.fps : 0,
+      pwr: estimateCurrent(s),
+      maxpwr: s.config.hw.led.maxpwr,
+      maxseg: s.seed.arch === "esp8266" ? 16 : 32
+    },
+    live: s.live
+  };
+}
+function applyBoot(s) {
+  const oldMdns = s.bootConfig.id.mdns;
+  s.bootConfig = clone(s.config);
+  if (s.host.endsWith(".local") && oldMdns !== s.config.id.mdns) {
+    s.host = s.config.id.mdns ? `${s.config.id.mdns}.local` : s.ip;
+  }
+  s.upSince = Date.now();
+  s.state.on = s.config.def.on;
+  s.state.bri = s.config.def.bri;
+  if (!connect(s)) {
+    s.wifiDownUntil = Infinity;
+  }
+}
+function wifiChanged(before, patch) {
+  const reasons = [];
+  if (patch.nw?.ins) {
+    const a = before.nw.ins.map((e) => e.ssid).join("|");
+    const b = patch.nw.ins.map((e) => e.ssid).join("|");
+    if (a !== b || patch.nw.ins.some((e) => e.psk !== void 0)) reasons.push("wifi");
+  }
+  if (patch.ap) {
+    if (patch.ap.ssid !== void 0 && patch.ap.ssid !== before.ap.ssid || patch.ap.psk !== void 0 || patch.ap.chan !== void 0 && patch.ap.chan !== before.ap.chan) {
+      reasons.push("ap");
+    }
+  }
+  return reasons.length > 0;
+}
+function applyPsk(entry) {
+  const e = { ...entry };
+  if (e.psk !== void 0) {
+    e.pskl = e.psk.length;
+    delete e.psk;
+  }
+  return e;
+}
+const api = {
+  async listDevices() {
+    await latency();
+    return registry.map((mac) => toDevice(sims.find((s) => s.seed.mac === mac)));
+  },
+  async discover() {
+    await sleep(rand(1400, 2200));
+    if (flags.discoveryEmpty) return [];
+    return sims.filter((s) => reachable(s)).map((s) => ({
+      mac: s.seed.mac,
+      name: s.config.id.name,
+      ip: s.ip,
+      host: s.config.id.mdns ? `${s.config.id.mdns}.local` : s.ip,
+      ver: s.seed.ver,
+      ledCount: s.config.hw.led.ins.reduce((t, o) => t + o.len, 0),
+      arch: s.seed.arch,
+      alreadyAdded: registry.includes(s.seed.mac)
+    }));
+  },
+  async probeHost(host) {
+    await sleep(rand(900, 1500));
+    const h = host.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+    const s = sims.find(
+      (x) => reachable(x) && (x.ip === h || `${x.config.id.mdns}.local` === h || x.config.id.mdns === h)
+    );
+    if (!s) {
+      throw new ApiError(404, "no_device", `No WLED device answered at ${host.trim()}. Check the address and that the device is powered on.`);
+    }
+    return {
+      mac: s.seed.mac,
+      name: s.config.id.name,
+      ip: s.ip,
+      host: h,
+      ver: s.seed.ver,
+      ledCount: s.config.hw.led.ins.reduce((t, o) => t + o.len, 0),
+      arch: s.seed.arch,
+      alreadyAdded: registry.includes(s.seed.mac)
+    };
+  },
+  async addDevice(host) {
+    const found = await api.probeHost(host);
+    if (found.alreadyAdded) throw new ApiError(409, "already_added", `${found.name} is already in your devices.`);
+    const s = sims.find((x) => x.seed.mac === found.mac);
+    s.id = s.id ?? uuid();
+    s.host = found.host;
+    registry.push(s.seed.mac);
+    emit();
+    return toDevice(s);
+  },
+  async removeDevice(id) {
+    await latency();
+    const s = bySim(id);
+    registry = registry.filter((m) => m !== s.seed.mac);
+    emit();
+  },
+  async getInfo(id) {
+    await latency();
+    return info(online(id));
+  },
+  async getState(id) {
+    await latency();
+    return clone(online(id).state);
+  },
+  async patchState(id, patch) {
+    await sleep(rand(150, 350));
+    const s = online(id);
+    s.state = { ...s.state, ...patch, udpn: { ...s.state.udpn, ...patch.udpn ?? {} } };
+    emit();
+    return clone(s.state);
+  },
+  async getConfig(id) {
+    await latency();
+    return clone(online(id).config);
+  },
+  async patchConfig(id, patch) {
+    await latency();
+    const s = online(id);
+    if (pinLocked(s)) throw new ApiError(401, "pin_required", "This device's settings are protected by a PIN.");
+    const before = clone(s.config);
+    const reconnect = wifiChanged(before, patch);
+    const next = clone(s.config);
+    for (const key of Object.keys(patch)) {
+      next[key] = { ...next[key], ...clone(patch[key]) };
+    }
+    next.nw.ins = next.nw.ins.map((e) => applyPsk(e));
+    next.ap = applyPsk(next.ap);
+    s.config = next;
+    s.state.udpn = { send: next.if.sync.send.en, recv: next.if.sync.recv.grp > 0 };
+    if (reconnect) {
+      s.failReconnect = flags.failNextWifi;
+      flags.failNextWifi = false;
+      schedule(s, Date.now() + 800, () => {
+        goDark(s);
+        s.wifiDownUntil = Date.now() + rand(6e3, 1e4);
+        schedule(s, s.wifiDownUntil, () => {
+          if (s.failReconnect || !connect(s)) {
+            s.wifiDownUntil = Infinity;
+          } else {
+            s.wifiDownUntil = 0;
+          }
+        });
+      });
+    }
+    emit();
+    return clone(s.config);
+  },
+  async unlock(id, pin) {
+    await latency();
+    const s = online(id);
+    if (!s.pin) return;
+    if (pin !== s.pin) throw new ApiError(401, "wrong_pin", "That PIN didn't work.");
+    s.unlockedUntil = Date.now() + 15 * 60 * 1e3;
+    emit();
+  },
+  async getCapabilities(id) {
+    await latency();
+    return capabilitiesFor(online(id).seed.arch);
+  },
+  async getPins(id) {
+    await latency();
+    const s = online(id);
+    const owners = { ...s.seed.extraPins ?? {} };
+    s.config.hw.led.ins.forEach((o) => o.pin.forEach((p) => owners[p] = "LEDs"));
+    return { pins: pinsFor(s.seed.arch, owners) };
+  },
+  async scanNetworks(id) {
+    online(id);
+    await sleep(rand(2e3, 4e3));
+    online(id);
+    return { networks: clone(AIRWAVES) };
+  },
+  async getPresets(id) {
+    await latency();
+    return clone(online(id).presets);
+  },
+  async reboot(id) {
+    await latency();
+    const s = online(id);
+    schedule(s, Date.now() + 300, () => {
+      goDark(s);
+      s.bootUntil = Date.now() + 1e4;
+      schedule(s, s.bootUntil, () => {
+        s.bootUntil = 0;
+        applyBoot(s);
+      });
+    });
+  }
+};
+async function getPendingReboot(id) {
+  await sleep(rand(100, 250));
+  const s = bySim(id);
+  const out = [];
+  if (s.config.id.mdns !== s.bootConfig.id.mdns) out.push("hostname");
+  const ipKey = (c) => c.nw.ins.filter((e) => !zero(e.ip)).map((e) => `${e.ssid}:${e.ip}:${e.gw}:${e.sn}`).join("|");
+  if (ipKey(s.config) !== ipKey(s.bootConfig)) out.push("static IP");
+  return out;
+}
+const prototype = {
+  subscribe(fn) {
+    listeners.add(fn);
+    return () => {
+      listeners.delete(fn);
+    };
+  },
+  flags() {
+    return { ...flags };
+  },
+  setFlag(key, value) {
+    flags = { ...flags, [key]: value };
+    emit();
+  },
+  sims() {
+    const now = Date.now();
+    return sims.map((s) => ({
+      mac: s.seed.mac,
+      id: s.id,
+      name: s.config.id.name,
+      added: registry.includes(s.seed.mac),
+      powered: s.powered,
+      reachable: reachable(s, now),
+      hasPin: !!s.pin,
+      pinLocked: pinLocked(s),
+      live: s.live,
+      status: !s.powered ? "offline" : now < s.bootUntil ? "rebooting" : s.wifiDownUntil === Infinity ? "ap-mode" : now < s.wifiDownUntil ? "reconnecting" : "online"
+    }));
+  },
+  setOnline(mac, on) {
+    const s = sims.find((x) => x.seed.mac === mac);
+    s.timers.forEach((t) => clearTimeout(t));
+    s.timers = [];
+    if (on) {
+      if (!s.powered) s.upSince = Date.now();
+      s.powered = true;
+      s.bootUntil = 0;
+      if (s.wifiDownUntil !== 0) {
+        s.wifiDownUntil = 0;
+        if (!connect(s)) {
+          s.ssid = "HomeNet";
+          s.ip = LEASES.HomeNet[s.seed.mac] ?? s.ip;
+        }
+      }
+    } else {
+      s.powered = false;
+      goDark(s);
+    }
+    emit();
+  },
+  setPinLocked(mac, locked) {
+    const s = sims.find((x) => x.seed.mac === mac);
+    if (locked) {
+      s.pin = s.pin ?? "1234";
+      s.unlockedUntil = 0;
+    } else {
+      s.unlockedUntil = Date.now() + 15 * 60 * 1e3;
+    }
+    emit();
+  },
+  setLive(mac, live) {
+    const s = sims.find((x) => x.seed.mac === mac);
+    s.live = live;
+    emit();
+  },
+  clearDevices() {
+    registry = [];
+    emit();
+  },
+  reset() {
+    seedAll();
+    emit();
+  }
+};
+/* =============================================================================
+   LED MODEL: pure logic for the LED Hardware section
+   ============================================================================= */
+const COLOR_ORDERS = ["GRB", "RGB", "BRG", "RBG", "BGR", "GBR"];
+const LEDMA_PRESETS = [
+  { v: 55, label: "5 V WS281x (55 mA)" },
+  { v: 35, label: "5 V eco WS2812 (35 mA)" },
+  { v: 30, label: "12 V WS2811 (30 mA)" },
+  { v: 255, label: "WS2815 (12 mA)" },
+  { v: 15, label: "Fairy/seed lights (15 mA)" }
+];
+const PWM_LABELS = {
+  41: ["White"],
+  42: ["Warm white", "Cold white"],
+  43: ["Red", "Green", "Blue"],
+  44: ["Red", "Green", "Blue", "White"],
+  45: ["Red", "Green", "Blue", "Warm white", "Cold white"]
+};
+function kindOf(t2) {
+  if (!t2) return "other";
+  if (t2.t === "D") return "digital";
+  if (t2.t === "2P") return "digital2";
+  if (/^A+$/.test(t2.t)) return "pwm";
+  if (t2.t === "") return "relay";
+  if (t2.t === "N") return "network";
+  return "other";
+}
+const isDigital = (t2) => {
+  const k = kindOf(t2);
+  return k === "digital" || k === "digital2";
+};
+function pinSlots(t2) {
+  const k = kindOf(t2);
+  if (k === "digital") return ["Data"];
+  if (k === "relay") return ["Relay"];
+  if (k === "digital2") return ["Data", "Clock"];
+  if (k === "pwm") return PWM_LABELS[t2.i] ?? t2.t.split("").map((_, i) => `Channel ${i + 1}`);
+  return [];
+}
+function channels(t2) {
+  if (!t2) return 3;
+  return (t2.c & 1 ? 3 : 0) + (t2.c & 2 ? 1 : 0) + (t2.c & 4 ? 1 : 0);
+}
+function outputMemory(o, t2) {
+  const len = Number.isFinite(o.len) ? o.len : 0;
+  return len * channels(t2) * 2 + len * 8;
+}
+const maPerLed = (ledma) => ledma === 255 ? 12 : ledma;
+function autoStarts(outs) {
+  let end = 0;
+  return outs.map((o) => {
+    const start = o.customStart ? o.start : end;
+    const len = Number.isFinite(o.len) ? o.len : 0;
+    end = (Number.isFinite(start) ? start : 0) + len;
+    return start === o.start ? o : { ...o, start };
+  });
+}
+function toDraft(cfg) {
+  let end = 0;
+  const outs = cfg.hw.led.ins.map((o, i) => {
+    const custom = o.start !== end;
+    end = o.start + o.len;
+    return {
+      ...o,
+      pin: [...o.pin],
+      key: `o${i}`,
+      customStart: custom,
+      ledmaCustom: !LEDMA_PRESETS.some((p) => p.v === o.ledma)
+    };
+  });
+  return { outs, maxpwr: cfg.hw.led.maxpwr, scaleBri: cfg.light["scale-bri"] };
+}
+function fromDraft(d) {
+  return {
+    maxpwr: d.maxpwr,
+    ins: d.outs.map(({ key: _k, customStart: _c, ledmaCustom: _m, ...o }) => o)
+  };
+}
+function recommendedSupply(outs, types) {
+  const total = 100 + outs.filter((o) => isDigital(types.find((t2) => t2.i === o.type))).reduce((t2, o) => t2 + (Number.isFinite(o.len) ? o.len : 0) * maPerLed(o.ledma), 0);
+  return { fullWhiteA: Math.ceil(total / 500) / 2, typicalA: Math.ceil(total / 1500) / 2 };
+}
+function pinLabel(pins) {
+  const set = pins.filter((p) => p >= 0);
+  if (!set.length) return "No pin";
+  return set.length === 1 ? `GPIO ${set[0]}` : `GPIO ${set.join(", ")}`;
+}
+function rangeLabel(o) {
+  const len = Number.isFinite(o.len) ? o.len : 0;
+  if (len <= 1) return `LED ${o.start}`;
+  return `LEDs ${o.start}\u2013${o.start + len - 1}`;
+}
+function pinOptions(pins, caps, outs, outIndex, slotIndex, slotNames) {
+  return pins.filter((p) => !caps.reservedPins.includes(p.p) && !caps.inputOnlyPins.includes(p.p) && !(p.c & 32)).map((p) => {
+    const warn = p.c & 8 ? "boot" : p.c & 16 ? "strapping" : void 0;
+    if (p.a && p.n && p.n !== "LEDs") return { p: p.p, disabled: true, note: `in use by ${p.n}`, warn };
+    for (let i = 0; i < outs.length; i++) {
+      const idx = outs[i].pin.indexOf(p.p);
+      if (idx === -1) continue;
+      if (i === outIndex && idx === slotIndex) continue;
+      if (i === outIndex) return { p: p.p, disabled: true, note: `used for ${slotNames[idx] ?? "another pin"}`, warn };
+      return { p: p.p, disabled: true, note: `used by Output ${i + 1}`, warn };
+    }
+    return { p: p.p, disabled: false, warn };
+  });
+}
+function firstFreePin(pins, caps, outs, exclude = []) {
+  const used = new Set([...outs.flatMap((o) => o.pin), ...exclude]);
+  const usable = pins.filter(
+    (p) => !caps.reservedPins.includes(p.p) && !caps.inputOnlyPins.includes(p.p) && !(p.c & 32) && !(p.a && p.n !== "LEDs") && !used.has(p.p)
+  );
+  return (usable.find((p) => !(p.c & 24)) ?? usable[0])?.p ?? -1;
+}
+function describeOutput(o, types) {
+  const t2 = types.find((x) => x.i === o.type);
+  const len = Number.isFinite(o.len) ? o.len : 0;
+  return `${t2?.n ?? `Type ${o.type}`}, ${pinLabel(o.pin)}${isDigital(t2) ? `, ${len} LEDs` : ""}`;
+}
+function diffLines(base, next, types) {
+  const lines = [];
+  const name = (i) => typeName(types, i);
+  next.outs.forEach((o, i) => {
+    const before = base.outs.find((b) => b.key === o.key);
+    if (!before) {
+      lines.push(`Add Output ${i + 1}: ${describeOutput(o, types)}`);
+      return;
+    }
+    const parts = [];
+    if (before.type !== o.type) parts.push(`${name(before.type)} \u2192 ${name(o.type)}`);
+    if (before.len !== o.len) parts.push(`${before.len} \u2192 ${o.len} LEDs`);
+    if (before.pin.join() !== o.pin.join()) parts.push(`${pinLabel(before.pin)} \u2192 ${pinLabel(o.pin)}`);
+    if (before.start !== o.start) parts.push(`starts at ${before.start} \u2192 ${o.start}`);
+    if ((before.order & 15) !== (o.order & 15))
+      parts.push(`${COLOR_ORDERS[before.order & 15]} \u2192 ${COLOR_ORDERS[o.order & 15]}`);
+    if (before.rev !== o.rev) parts.push(o.rev ? "reversed" : "no longer reversed");
+    if (before.skip !== o.skip) parts.push(`skip ${before.skip} \u2192 ${o.skip} LEDs`);
+    if (before.ledma !== o.ledma) parts.push(`${maPerLed(before.ledma)} \u2192 ${maPerLed(o.ledma)} mA per LED`);
+    const oldIndex = base.outs.indexOf(before);
+    const label = oldIndex !== i ? `Output ${oldIndex + 1} (now ${i + 1})` : `Output ${i + 1}`;
+    if (parts.length) lines.push(`${label}: ${parts.join(", ")}`);
+  });
+  base.outs.forEach((b, i) => {
+    if (!next.outs.some((o) => o.key === b.key)) lines.push(`Remove Output ${i + 1} (${describeOutput(b, types)})`);
+  });
+  if (base.maxpwr !== next.maxpwr) {
+    if (!next.maxpwr) lines.push("Turn the current limiter off");
+    else if (!base.maxpwr) lines.push(`Limit current to ${formatAmps(next.maxpwr)}`);
+    else lines.push(`Current limit: ${formatAmps(base.maxpwr)} \u2192 ${formatAmps(next.maxpwr)}`);
+  }
+  if (base.scaleBri !== next.scaleBri) lines.push(`Brightness factor: ${base.scaleBri}% \u2192 ${next.scaleBri}%`);
+  return lines;
+}
+function typeName(types, i) {
+  return types.find((x) => x.i === i)?.n ?? `Type ${i}`;
+}
+function outputsChanged(base, next) {
+  return JSON.stringify(base.outs) !== JSON.stringify(next.outs);
+}
+/* =============================================================================
+   SHADCN/UI CLASS STRINGS
+   The exact Tailwind classes each shadcn/ui component renders, so markup here
+   matches what <Button variant="outline" size="sm"> etc. produce in a real build.
+   Where shadcn styles Radix's data-[state=…], this file uses the equivalent
+   aria-* variant on plain HTML (aria-checked, aria-selected, aria-pressed).
+   ============================================================================= */
+
+const cn = (...parts) => parts.filter(Boolean).join(" ");
+
+// Button ----------------------------------------------------------------------
+const BUTTON_BASE =
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0";
+const BUTTON_VARIANTS = {
+  default: "bg-primary text-primary-foreground shadow-sm hover:bg-primary/90",
+  destructive: "bg-destructive text-destructive-foreground shadow-sm hover:bg-destructive/90",
+  outline: "border border-input bg-transparent shadow-sm hover:bg-accent hover:text-accent-foreground",
+  secondary: "bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/80",
+  ghost: "hover:bg-accent hover:text-accent-foreground",
+  link: "text-foreground underline-offset-4 hover:underline",
+  // app-specific variant: outlined destructive action (Remove device)
+  "destructive-outline": "border border-danger/50 text-danger shadow-sm hover:bg-danger/10",
+  "destructive-ghost": "text-danger hover:bg-danger/10",
+};
+const BUTTON_SIZES = {
+  default: "h-10 px-4 py-2",
+  sm: "h-9 rounded-md px-3",
+  lg: "h-11 rounded-md px-6",
+  icon: "h-10 w-10",
+  "icon-sm": "h-8 w-8",
+  inline: "h-auto p-0",
+};
+const button = ({ variant = "default", size = "default", className = "" } = {}) =>
+  cn(BUTTON_BASE, BUTTON_VARIANTS[variant], BUTTON_SIZES[size], className);
+
+// Card ------------------------------------------------------------------------
+const CARD = "rounded-lg border bg-card text-card-foreground";
+const CARD_HEADER = "flex flex-row items-start justify-between gap-3 p-4 sm:p-5";
+const CARD_TITLE = "text-[15px] font-semibold leading-tight tracking-tight";
+const CARD_DESCRIPTION = "text-sm text-muted-foreground";
+const CARD_CONTENT = "flex flex-col gap-5 p-4 pt-0 sm:p-5 sm:pt-0";
+
+// Badge -----------------------------------------------------------------------
+const BADGE_BASE = "inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2 py-0.5 text-xs font-medium transition-colors [&_svg]:size-3";
+const BADGE_VARIANTS = {
+  default: "border-transparent bg-primary text-primary-foreground",
+  secondary: "border-transparent bg-secondary text-secondary-foreground",
+  outline: "text-muted-foreground",
+  info: "border-border bg-muted text-muted-foreground",
+  warning: "border-warning/40 bg-warning-muted text-warning",
+  danger: "border-danger/40 bg-danger/10 text-danger",
+};
+const badge = (variant = "default", className = "") => cn(BADGE_BASE, BADGE_VARIANTS[variant], className);
+
+// Input / Label / form text --------------------------------------------------
+const INPUT =
+  "flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-base shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 aria-[invalid=true]:border-danger aria-[invalid=true]:focus-visible:ring-danger sm:text-sm";
+const LABEL = "text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70";
+const FORM_ITEM = "flex flex-col gap-2";
+const FORM_DESCRIPTION = "text-[13px] leading-snug text-muted-foreground";
+const FORM_MESSAGE = "text-[13px] font-medium text-danger";
+
+// Select (SelectTrigger styling on a native <select>; chevron drawn separately) ---
+const SELECT_TRIGGER =
+  "flex h-10 w-full appearance-none items-center justify-between whitespace-nowrap rounded-md border border-input bg-background py-2 pl-3 pr-9 text-sm shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 aria-[invalid=true]:border-danger";
+
+// Switch ------------------------------------------------------------------------
+const SWITCH =
+  "peer group relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent bg-input shadow-sm transition-colors before:absolute before:-inset-2.5 before:content-[''] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 aria-checked:bg-primary";
+const SWITCH_THUMB =
+  "pointer-events-none block h-5 w-5 rounded-full bg-foreground shadow-lg ring-0 transition-transform group-aria-checked:translate-x-5 group-aria-checked:bg-primary-foreground";
+
+// Slider (Track / Range / Thumb, driven by a transparent native range input) -------
+const SLIDER = "relative flex w-full touch-none select-none items-center py-2";
+const SLIDER_INPUT = "peer absolute inset-0 z-10 h-full w-full cursor-pointer opacity-0 disabled:cursor-not-allowed";
+const SLIDER_TRACK = "relative h-1.5 w-full grow overflow-hidden rounded-full bg-secondary peer-disabled:opacity-50";
+const SLIDER_RANGE = "absolute h-full bg-primary";
+const SLIDER_THUMB =
+  "pointer-events-none absolute top-1/2 block h-5 w-5 -translate-y-1/2 rounded-full border-2 border-primary bg-background shadow transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-ring peer-disabled:opacity-50";
+
+// Checkbox ------------------------------------------------------------------------
+const CHECKBOX =
+  "peer relative flex h-5 w-5 shrink-0 items-center justify-center rounded-sm border border-input shadow-sm before:absolute before:-inset-3 before:content-[''] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 aria-checked:border-primary aria-checked:bg-primary aria-checked:text-primary-foreground";
+
+// Tabs ----------------------------------------------------------------------------
+const TABS_LIST = "grid h-10 w-full grid-cols-4 items-center justify-center rounded-lg bg-muted p-1 text-muted-foreground sm:inline-flex sm:w-auto";
+const TABS_TRIGGER =
+  "inline-flex h-8 items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-3 text-sm font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 aria-selected:bg-background aria-selected:text-foreground aria-selected:shadow [&_svg]:hidden sm:[&_svg]:block";
+
+// Toggle / ToggleGroup (variant "outline") ---------------------------------------------
+const TOGGLE_OUTLINE =
+  "inline-flex items-center justify-center gap-2 rounded-md border border-input bg-transparent text-sm font-medium shadow-sm transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 aria-pressed:border-primary aria-pressed:bg-primary/15 aria-pressed:font-semibold aria-pressed:text-foreground";
+
+// Progress --------------------------------------------------------------------------
+const PROGRESS = "relative h-2 w-full overflow-hidden rounded-full bg-secondary";
+const PROGRESS_INDICATOR = "h-full bg-foreground/70 transition-all";
+
+// Skeleton / Separator -------------------------------------------------------------
+const SKELETON = "animate-pulse rounded-md bg-muted";
+const SEPARATOR = "h-px w-full shrink-0 bg-border";
+
+// Dialog / AlertDialog / Sheet ------------------------------------------------------
+const DIALOG_OVERLAY = "fixed inset-0 z-[80] bg-black/70 animate-fade-in";
+const DIALOG_CONTENT =
+  "fixed left-1/2 top-1/2 z-[80] grid max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto rounded-lg border bg-background p-5 shadow-xl animate-dialog-in sm:p-6";
+const DIALOG_HEADER = "flex flex-col gap-1.5 pr-8 text-left";
+const DIALOG_FOOTER = "flex flex-col-reverse gap-2 sm:flex-row sm:justify-end";
+const DIALOG_TITLE = "text-lg font-semibold leading-tight";
+const DIALOG_DESCRIPTION = "text-sm text-muted-foreground";
+const DIALOG_CLOSE =
+  "absolute right-3 top-3 inline-flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+const SHEET_BOTTOM =
+  "fixed inset-x-0 bottom-0 z-[80] flex max-h-[92dvh] flex-col rounded-t-xl border-t bg-background pb-[env(safe-area-inset-bottom,0px)] shadow-xl animate-slide-up";
+const SHEET_HEADER = "relative flex flex-col gap-1 border-b p-4 pr-14";
+const SHEET_FOOTER = "flex gap-2 border-t p-4";
+
+// Toast (Sonner) ----------------------------------------------------------------------
+const TOASTER =
+  "fixed z-[90] flex w-[min(360px,calc(100vw-32px))] flex-col gap-2 left-1/2 top-[calc(env(safe-area-inset-top,0px)+12px)] -translate-x-1/2 lg:left-auto lg:top-auto lg:translate-x-0 lg:right-[max(16px,env(safe-area-inset-right,0px))] lg:bottom-[calc(env(safe-area-inset-bottom,0px)+16px)]";
+const TOAST = "flex gap-2.5 rounded-lg border border-border bg-popover p-3.5 text-foreground shadow-lg animate-rise";
+
+// Dropdown menu ---------------------------------------------------------------------------
+const MENU_CONTENT = "absolute right-0 top-11 z-50 min-w-[10rem] overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-lg animate-zoom-in";
+const MENU_RADIO_ITEM =
+  "relative flex w-full cursor-default select-none items-center gap-2 rounded-sm py-2 pl-8 pr-2 text-left text-sm outline-none hover:bg-accent focus-visible:bg-accent [&_svg]:size-4";
+/* =============================================================================
+   CORE: state, rendering, data loading, routing, event wiring
+   -----------------------------------------------------------------------------
+   Every screen is a plain function that returns an HTML string from the global
+   state `S`. `render()` re-runs them and morphdom patches the live DOM, so focus,
+   caret position and open native selects survive re-renders.
+   Clicks are wired with data-a="actionName", text/range input with data-in,
+   select/checkbox changes with data-ch, and navigation with data-nav="/path".
+   ============================================================================= */
+
+const S = {
+  path: "/",                       // in-memory route, e.g. "/devices/<id>/settings/network"
+  theme: readTheme(),              // "system" | "dark" | "light"
+  desktop: matchMedia("(min-width: 900px)").matches,
+  cache: {},                       // query cache: key -> { status, data, error, at, stale }
+  inflight: {},
+  form: null,                      // the one settings form on screen: { key, base, draft, proj, saving, ui }
+  modal: null,                     // the open dialog/sheet, if any
+  toasts: [],
+  reboot: {},                      // deviceId -> { started } while a reboot is being watched
+  reconnect: null,                 // Wi-Fi save flow: { deviceId, phase, started, target, oldIp, ip }
+  ui: { themeMenu: false, proto: false, open: {}, adding: null, manual: { host: "", busy: false, error: null, found: null } },
+  focus: null,                     // id to focus after the next paint
+};
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+const deepClone = (v) => (v === undefined ? v : JSON.parse(JSON.stringify(v)));
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const esc = (v) =>
+  String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const attr = (cond, name, value = "") => (cond ? ` ${name}${value !== "" ? `="${esc(value)}"` : ""}` : "");
+const when = (cond, html) => (cond ? (typeof html === "function" ? html() : html) : "");
+const each = (list, fn) => list.map(fn).join("");
+
+/** Lucide icon as inline SVG. Size defaults to size-4 (16px), like lucide-react inside shadcn buttons. */
+function icon(name, cls = "size-4") {
+  return `<svg class="shrink-0 ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name] ?? ""}</svg>`;
+}
+function spinner(cls = "size-4") {
+  return icon("loader-circle", `animate-spin ${cls}`);
+}
+/** Skeleton block. `w`/`h` are Tailwind size classes, e.g. skel("w-32 h-4"). */
+function skel(size = "h-4 w-full", extra = "") {
+  return `<div class="${SKELETON} ${size} ${extra}"></div>`;
+}
+
+// ---------------------------------------------------------------------------
+// Theme
+// ---------------------------------------------------------------------------
+function readTheme() {
+  try {
+    const v = localStorage.getItem("strand.theme");
+    if (v === "dark" || v === "light" || v === "system") return v;
+  } catch {}
+  return "system";
+}
+function applyTheme() {
+  const root = document.documentElement;
+  if (S.theme === "system") root.removeAttribute("data-theme");
+  else root.setAttribute("data-theme", S.theme);
+}
+function resolvedTheme() {
+  if (S.theme !== "system") return S.theme;
+  const attrTheme = document.documentElement.getAttribute("data-theme");
+  if (attrTheme === "dark" || attrTheme === "light") return attrTheme;
+  return matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+}
+
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+let queued = false;
+function render() {
+  if (queued) return;
+  queued = true;
+  requestAnimationFrame(paint);
+}
+function paint() {
+  queued = false;
+  const root = document.getElementById("app");
+  morphdom(root, `<div id="app">${App()}</div>`, {
+    onBeforeElUpdated: (from, to) => !from.isEqualNode(to),
+  });
+  if (S.focus) {
+    const el = document.getElementById(S.focus);
+    S.focus = null;
+    if (el) el.focus();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Data loading: a tiny query cache (stands in for TanStack Query)
+// ---------------------------------------------------------------------------
+function q(key, fn, { enabled = true, ttl = 0 } = {}) {
+  let e = S.cache[key];
+  if (!enabled) return e ? { ...e, fetching: false } : { status: "idle" };
+  if (!e) e = S.cache[key] = { status: "loading", stale: true, at: 0 };
+  const expired = ttl && Date.now() - e.at > ttl;
+  if ((e.stale || expired) && !S.inflight[key]) {
+    S.inflight[key] = true;
+    e.stale = false;
+    Promise.resolve()
+      .then(fn)
+      .then(
+        (data) => (S.cache[key] = { status: "ok", data, at: Date.now(), stale: false }),
+        (error) => (S.cache[key] = { status: "error", data: S.cache[key]?.data, error, at: Date.now(), stale: false }),
+      )
+      .finally(() => {
+        delete S.inflight[key];
+        render();
+      });
+  }
+  return { ...e, fetching: !!S.inflight[key] };
+}
+function setCache(key, data) {
+  S.cache[key] = { status: "ok", data, at: Date.now(), stale: false };
+}
+function invalidate(test) {
+  for (const k of Object.keys(S.cache)) if (test(k)) S.cache[k].stale = true;
+  render();
+}
+const isLiveKey = (k) => k === "devices" || /:(info|state|pending)$/.test(k);
+
+// ---------------------------------------------------------------------------
+// Routing
+// ---------------------------------------------------------------------------
+function route() {
+  const [path, qs = ""] = S.path.split("?");
+  const parts = path.split("/").filter(Boolean);
+  if (parts[0] === "add") return { name: "add" };
+  if (parts[0] === "devices" && parts[1]) {
+    return {
+      name: "device",
+      id: parts[1],
+      settings: parts[2] === "settings",
+      section: parts[3] ?? null,
+      tab: new URLSearchParams(qs).get("tab") ?? "control",
+    };
+  }
+  return { name: "home" };
+}
+function navigate(path, { force = false } = {}) {
+  const leavingPath = S.path.split("?")[0] !== path.split("?")[0];
+  if (!force && leavingPath && S.form && formDirty(S.form)) {
+    S.modal = { type: "leave", to: path };
+    render();
+    return;
+  }
+  if (leavingPath) S.form = null;
+  if (path === "/add") resetAddPage(); // discovery runs fresh every time the page opens
+  S.path = path;
+  S.ui.themeMenu = false;
+  window.scrollTo(0, 0);
+  render();
+}
+
+// ---------------------------------------------------------------------------
+// Settings forms: one draft at a time, seeded from server data
+// ---------------------------------------------------------------------------
+function useForm(key, init, proj = (d) => d) {
+  if (!S.form || S.form.key !== key) {
+    const base = init();
+    S.form = { key, base, draft: deepClone(base), proj, saving: false, ui: {} };
+  }
+  S.form.proj = proj;
+  return S.form;
+}
+function formDirty(f) {
+  return !!f && !same(f.proj(f.draft), f.proj(f.base));
+}
+function updateDraft(fn) {
+  if (!S.form) return;
+  S.form.draft = fn(S.form.draft);
+  render();
+}
+function setPath(obj, path, value) {
+  const keys = path.split(".");
+  const next = deepClone(obj);
+  let cur = next;
+  keys.slice(0, -1).forEach((k) => (cur = cur[k]));
+  cur[keys.at(-1)] = value;
+  return next;
+}
+
+/** PATCH one section; on 401 pin_required ask for the PIN, unlock, retry. */
+async function saveSection(deviceId, label, patch, { quiet = false } = {}) {
+  if (S.form) S.form.saving = true;
+  render();
+  try {
+    await withPin(deviceId, () => api.patchConfig(deviceId, patch));
+    const fresh = await api.getConfig(deviceId);
+    setCache(`${deviceId}:config`, fresh);
+    invalidate((k) => k === "devices" || k === `${deviceId}:info` || k === `${deviceId}:pending`);
+    if (!quiet) toast("success", `${label} saved`);
+    return fresh;
+  } catch (e) {
+    if (e && e.cancelled) toast("info", "Not saved. The device's settings are still locked.", "Your changes are still here.");
+    else toast("error", `Couldn't save ${label}`, `${e.message} Your changes are still here.`);
+    return null;
+  } finally {
+    if (S.form) S.form.saving = false;
+    render();
+  }
+}
+
+async function withPin(deviceId, fn) {
+  try {
+    return await fn();
+  } catch (e) {
+    if (e instanceof ApiError && e.code === "pin_required") {
+      await askPin(deviceId);
+      return await fn();
+    }
+    throw e;
+  }
+}
+function askPin(deviceId) {
+  return new Promise((resolve, reject) => {
+    S.modal = { type: "pin", deviceId, pin: "", error: null, busy: false, cooldownUntil: 0, resolve, reject };
+    S.focus = "pin-input";
+    render();
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Toasts
+// ---------------------------------------------------------------------------
+let toastId = 0;
+function toast(kind, title, desc = "") {
+  const id = ++toastId;
+  S.toasts = [...S.toasts.slice(-2), { id, kind, title, desc }];
+  render();
+  setTimeout(() => {
+    S.toasts = S.toasts.filter((t) => t.id !== id);
+    render();
+  }, 4200);
+}
+
+// ---------------------------------------------------------------------------
+// Reboot watching (shared by System and the "Reboot now" banner)
+// ---------------------------------------------------------------------------
+async function rebootDevice(id, name) {
+  try {
+    await api.reboot(id);
+  } catch (e) {
+    toast("error", `Couldn't reboot ${name}`, e.message);
+    return;
+  }
+  const started = Date.now();
+  S.reboot[id] = { started };
+  render();
+  let seenDown = false;
+  const poll = async () => {
+    try {
+      const info = await api.getInfo(id);
+      if (seenDown || Date.now() - started > 3000) {
+        delete S.reboot[id];
+        setCache(`${id}:info`, info);
+        invalidate((k) => (k.startsWith(id) && !k.endsWith(":info")) || k === "devices");
+        toast("success", `${name} is back online`);
+        return;
+      }
+    } catch {
+      seenDown = true;
+      if (Date.now() - started > 60000) {
+        delete S.reboot[id];
+        toast("error", `${name} hasn't come back after rebooting`, "Give it another minute, then check its power supply.");
+        render();
+        return;
+      }
+    }
+    setTimeout(poll, 2000);
+  };
+  setTimeout(poll, 1500);
+}
+
+// ---------------------------------------------------------------------------
+// Event wiring
+// ---------------------------------------------------------------------------
+const A = {}; // action handlers, registered by each screen file
+
+document.addEventListener("click", (e) => {
+  const nav = e.target.closest("[data-nav]");
+  if (nav) {
+    e.preventDefault();
+    if (nav.getAttribute("aria-disabled") === "true") return;
+    navigate(nav.dataset.nav);
+    return;
+  }
+  const el = e.target.closest("[data-a]");
+  if (el && !el.disabled && A[el.dataset.a]) A[el.dataset.a](el, e);
+  // Clicking outside a menu closes it.
+  if (S.ui.themeMenu && !e.target.closest("[data-menu-root]")) {
+    S.ui.themeMenu = false;
+    render();
+  }
+});
+document.addEventListener("input", (e) => {
+  const el = e.target.closest("[data-in]");
+  if (el && A[el.dataset.in]) A[el.dataset.in](el, e);
+});
+document.addEventListener("change", (e) => {
+  const el = e.target.closest("[data-ch]");
+  if (el && A[el.dataset.ch]) A[el.dataset.ch](el, e);
+});
+document.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const el = e.target.closest("[data-submit]");
+  if (el && A[el.dataset.submit]) A[el.dataset.submit](el, e);
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && S.modal && A.closeModal) A.closeModal();
+  if (e.key === "Escape" && S.ui.themeMenu) {
+    S.ui.themeMenu = false;
+    render();
+  }
+});
+
+/** Generic field binding: data-in="field" data-path="def.bri" data-type="int|float|str|bool". */
+function readValue(el) {
+  const t = el.dataset.type;
+  if (el.type === "checkbox") return el.checked;
+  if (t === "int") return /^\s*\d+\s*$/.test(el.value) ? Number(el.value) : el.value.trim() === "" ? null : NaN;
+  if (t === "num") return Number(el.value);
+  return el.value;
+}
+A.field = (el) => updateDraft((d) => setPath(d, el.dataset.path, readValue(el)));
+A.toggleField = (el) => updateDraft((d) => setPath(d, el.dataset.path, el.getAttribute("aria-checked") !== "true"));
+A.disclose = (el) => {
+  const k = el.dataset.key;
+  S.ui.open[k] = !S.ui.open[k];
+  render();
+};
+/* =============================================================================
+   SHARED UI PIECES
+   Small HTML builders, one per shadcn/ui component, using the class strings above.
+   ============================================================================= */
+
+/** <Switch>. Clicking runs data-a (default: flip the draft value at `path`). */
+function Switch({ id = "", checked, label = "", action = "toggleField", path = "", disabled = false, data = "" }) {
+  return `<button type="button" role="switch" class="${SWITCH}"${attr(id, "id", id)} aria-checked="${checked ? "true" : "false"}"${attr(label, "aria-label", label)} data-a="${action}"${attr(
+    path,
+    "data-path",
+    path,
+  )} ${data}${disabled ? " disabled" : ""}><span class="${SWITCH_THUMB}"></span></button>`;
+}
+
+/** <Slider>. Live updates through data-in, the final value through data-ch. */
+function Slider({ id = "", value, min = 1, max = 255, label, input = "field", change = "", path = "", disabled = false, data = "" }) {
+  const pct = ((value - min) / (max - min)) * 100;
+  return `<div class="${SLIDER}">
+    <input type="range"${attr(id, "id", id)} class="${SLIDER_INPUT}" min="${min}" max="${max}" step="1" value="${value}" aria-label="${esc(label)}" data-in="${input}"${attr(
+      change,
+      "data-ch",
+      change,
+    )}${attr(path, "data-path", path)} data-type="num" ${data}${disabled ? " disabled" : ""}>
+    <span class="${SLIDER_TRACK}"><span class="${SLIDER_RANGE}" style="width:${pct}%"></span></span>
+    <span class="${SLIDER_THUMB}" style="left:calc(${pct}% - ${(pct / 100) * 20}px)"></span>
+  </div>`;
+}
+
+/** <Select>. options: [{ v, label, disabled }] or [{ group, options: [...] }]. */
+function Select({ id, value, options, change = "field", path = "", type = "int", className = "", mono = false, disabled = false, invalid = false, placeholder = "", data = "" }) {
+  const opt = (o) =>
+    `<option value="${esc(o.v)}"${String(o.v) === String(value) ? " selected" : ""}${o.disabled ? " disabled" : ""}>${esc(o.label)}</option>`;
+  const body = options.map((o) => (o.group ? `<optgroup label="${esc(o.group)}">${o.options.map(opt).join("")}</optgroup>` : opt(o))).join("");
+  const ph = placeholder
+    ? `<option value="" disabled${value === null || value === undefined || value === "" || value === -1 ? " selected" : ""}>${esc(placeholder)}</option>`
+    : "";
+  return `<div class="relative w-full ${className}">
+    <select id="${id}" class="${cn(SELECT_TRIGGER, mono && "font-mono")}" data-ch="${change}"${attr(path, "data-path", path)} data-type="${type}"${attr(
+      invalid,
+      "aria-invalid",
+      "true",
+    )} aria-describedby="${id}-msg" ${data}${disabled ? " disabled" : ""}>${ph}${body}</select>
+    ${icon("chevron-down", "pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 opacity-60")}
+  </div>`;
+}
+
+/** <FormItem> with <FormLabel> (+ trailing badge), control, <FormDescription>, <FormMessage>. */
+function Field({ id, label, trailing = "", control, help = "", error = "", srLabel = false }) {
+  return `<div class="${FORM_ITEM}">
+    <div class="flex flex-wrap items-center gap-2"><label for="${id}" class="${srLabel ? "sr-only" : LABEL}">${label}</label>${trailing}</div>
+    ${control}
+    ${when(help, `<p id="${id}-desc" class="${FORM_DESCRIPTION}">${help}</p>`)}
+    ${when(error, `<p id="${id}-msg" role="alert" class="${FORM_MESSAGE}">${esc(error)}</p>`)}
+  </div>`;
+}
+
+function SwitchRow({ id, label, description = "", control, trailing = "" }) {
+  return `<div class="flex items-start justify-between gap-4">
+    <div class="flex min-w-0 flex-col gap-1">
+      <div class="flex flex-wrap items-center gap-2"><label for="${id}" class="text-sm font-medium leading-snug">${label}</label>${trailing}</div>
+      ${when(description, `<p class="${FORM_DESCRIPTION}">${description}</p>`)}
+    </div>
+    <div class="pt-0.5">${control}</div>
+  </div>`;
+}
+
+/** "Reconnects" / "After reboot" badge next to a field label; the title explains it. */
+function Consequence(kind) {
+  return kind === "reconnects"
+    ? `<span tabindex="0" class="${badge("warning", "cursor-help")}" title="Saving a change here makes the device drop off Wi-Fi and reconnect right away.">${icon("refresh-cw")}Reconnects</span>`
+    : `<span tabindex="0" class="${badge("info", "cursor-help")}" title="Saved now, but only takes effect the next time the device restarts.">${icon("rotate-cw")}After reboot</span>`;
+}
+
+/** <Collapsible> used as an "Advanced" disclosure. */
+function Disclosure(key, label, content) {
+  const open = !!S.ui.open[key];
+  return `<div>
+    <button type="button" class="-mx-2 flex items-center gap-1.5 rounded-md px-2 py-2 text-sm font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" data-a="disclose" data-key="${key}" aria-expanded="${open}">${icon(
+      "chevron-down",
+      cn("size-4 transition-transform", open && "rotate-180"),
+    )}${label}</button>
+    ${when(open, () => `<div class="flex flex-col gap-5 pb-1 pt-3">${content()}</div>`)}
+  </div>`;
+}
+
+function SettingsCard({ title = "", description = "", action = "", body }) {
+  return `<section class="${CARD}">
+    ${when(
+      title,
+      `<div class="${CARD_HEADER}"><div class="flex min-w-0 flex-col gap-1"><h3 class="${CARD_TITLE}">${title}</h3>${when(
+        description,
+        `<p class="${CARD_DESCRIPTION}">${description}</p>`,
+      )}</div>${action}</div>`,
+    )}
+    <div class="${title ? CARD_CONTENT : "flex flex-col gap-5 p-4 sm:p-5"}">${body}</div>
+  </section>`;
+}
+
+function SectionHead(title, description) {
+  return `<div class="mb-4 flex flex-col gap-1"><h2 class="text-lg font-semibold tracking-tight">${title}</h2><p class="text-sm text-muted-foreground">${description}</p></div>`;
+}
+
+/** Sticky save bar: appears only when the section has unsaved changes. */
+function SaveBar({ dirty, saving, errorCount = 0, blocked = "", saveLabel = "Save", save = "save", discard = "discard" }) {
+  if (!dirty) return "";
+  const msg = blocked || (errorCount ? `Fix ${errorCount} ${errorCount === 1 ? "field" : "fields"} to save.` : "");
+  return `<div class="sticky bottom-[calc(env(safe-area-inset-bottom,0px)+12px)] z-30 mt-6 animate-rise">
+    <div class="flex flex-wrap items-center gap-3 rounded-lg border bg-popover/95 p-3 shadow-lg backdrop-blur">
+      <div class="min-w-0 flex-1"><p class="text-sm font-medium">Unsaved changes</p>${when(msg, `<p role="status" class="text-[13px] text-danger">${esc(msg)}</p>`)}</div>
+      <div class="flex gap-2">
+        <button type="button" class="${button({ variant: "ghost" })}" data-a="${discard}"${saving ? " disabled" : ""}>Discard</button>
+        <button type="button" class="${button()}" data-a="${save}"${saving || msg ? " disabled" : ""}>${saving ? `${spinner()}Saving…` : saveLabel}</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function StatusText(device) {
+  return `<span class="inline-flex items-center gap-2 text-[13px] text-muted-foreground"><span aria-hidden="true" class="${
+    device.online
+      ? "inline-block h-2 w-2 shrink-0 rounded-full bg-success shadow-[0_0_0_3px_hsl(var(--success)/0.18)]"
+      : "inline-block h-2 w-2 shrink-0 rounded-full bg-muted-foreground/60"
+  }"></span>${device.online ? "Online" : `Offline · last seen ${relativeTime(device.lastSeen)}`}</span>`;
+}
+function LockBadge() {
+  return `<span class="${badge("info")}">${icon("lock")}Settings locked</span>`;
+}
+/** A small "lamp" that glows with the device's brightness. */
+function Lamp({ on, bri, online, dim = false }) {
+  const lit = online && on;
+  const strength = lit ? 0.25 + (bri / 255) * 0.75 : 0;
+  return `<span aria-hidden="true" class="${cn("relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full border bg-muted", dim && "opacity-60")}">
+    <span class="absolute inset-0 rounded-full transition-opacity duration-300" style="opacity:${strength.toFixed(
+      2,
+    )};background:radial-gradient(circle,hsl(var(--glow)/.95) 0%,hsl(var(--glow)/.35) 45%,transparent 72%)"></span>
+    <span class="${cn("relative h-2.5 w-2.5 rounded-full transition-colors", lit ? "bg-glow" : "bg-muted-foreground/40")}"></span>
+  </span>`;
+}
+function StrandMark(cls = "h-3 w-10") {
+  return `<svg viewBox="0 0 40 12" class="${cls}" aria-hidden="true"><rect x="0.5" y="4.5" width="39" height="3" rx="1.5" class="fill-muted"/>${[4, 12, 20, 28, 36]
+    .map((x, i) => `<circle cx="${x}" cy="6" r="3.2" class="fill-glow" opacity="${(1 - i * 0.17).toFixed(2)}"/>`)
+    .join("")}</svg>`;
+}
+function SignalBars(rssi) {
+  const n = rssiBars(rssi);
+  return `<span role="img" aria-label="Signal ${rssiQuality(rssi)}" class="inline-flex h-3.5 items-end gap-[2px]">${[1, 2, 3, 4]
+    .map((b) => `<span class="${cn("w-[3px] rounded-sm", b <= n ? "bg-foreground" : "bg-muted-foreground/30")}" style="height:${b * 25}%"></span>`)
+    .join("")}</span>`;
+}
+function ProgressBar(pct, { indicator = PROGRESS_INDICATOR, className = "", label = "" } = {}) {
+  return `<div class="${cn(PROGRESS, className)}"${label ? ` role="img" aria-label="${esc(label)}"` : ""}><div class="${indicator}" style="width:${Math.max(
+    0,
+    Math.min(100, pct),
+  )}%"></div></div>`;
+}
+
+const GUTTER = "pl-[max(16px,env(safe-area-inset-left,0px))] pr-[max(16px,env(safe-area-inset-right,0px))]";
+/** Page container. Pass max width / top padding explicitly so classes never conflict. */
+const page = ({ max = "max-w-6xl", pt = "pt-5", extra = "" } = {}) => cn("mx-auto w-full pb-28", max, pt, GUTTER, extra);
+const BACK_LINK = button({ variant: "ghost", size: "sm", className: "-ml-3 text-muted-foreground" });
+
+function Header(actions = "") {
+  const t = resolvedTheme();
+  return `<header class="sticky top-[env(safe-area-inset-top,0px)] z-40 border-b bg-background/90 backdrop-blur supports-[backdrop-filter]:bg-background/75">
+    <div class="mx-auto flex h-14 max-w-6xl items-center gap-3 ${GUTTER}">
+      <a href="#/" data-nav="/" class="flex items-center gap-2.5 rounded-md py-1 pr-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">${StrandMark()}<span class="text-[15px] font-semibold tracking-tight">Strand</span></a>
+      <div class="relative ml-auto flex items-center gap-1.5" data-menu-root>
+        ${actions}
+        <button type="button" class="${button({ variant: "ghost", size: "icon" })}" aria-label="Theme" aria-haspopup="menu" aria-expanded="${S.ui.themeMenu}" data-a="themeMenu">${icon(
+          t === "dark" ? "moon" : "sun",
+        )}</button>
+        ${when(
+          S.ui.themeMenu,
+          `<div role="menu" class="${MENU_CONTENT}"><p class="px-2 py-1.5 text-xs font-medium text-muted-foreground">Theme</p>${[
+            ["system", "monitor", "System"],
+            ["dark", "moon", "Dark"],
+            ["light", "sun", "Light"],
+          ]
+            .map(
+              ([v, ic, label]) =>
+                `<button type="button" role="menuitemradio" aria-checked="${S.theme === v}" class="${MENU_RADIO_ITEM}" data-a="setTheme" data-v="${v}"><span class="absolute left-2 flex h-3.5 w-3.5 items-center justify-center">${when(
+                  S.theme === v,
+                  icon("check"),
+                )}</span>${icon(ic)}${label}</button>`,
+            )
+            .join("")}</div>`,
+        )}
+      </div>
+    </div>
+  </header>`;
+}
+A.themeMenu = () => {
+  S.ui.themeMenu = !S.ui.themeMenu;
+  render();
+};
+A.setTheme = (el) => {
+  S.theme = el.dataset.v;
+  try {
+    localStorage.setItem("strand.theme", S.theme);
+  } catch {}
+  applyTheme();
+  S.ui.themeMenu = false;
+  render();
+};
+
+/** A <fieldset> that disables every control inside while saving or offline. */
+const FIELDSET = "m-0 flex min-w-0 flex-col gap-4 border-0 p-0 disabled:opacity-70";
+const SUBTLE_BOX = "rounded-md border bg-muted/40 p-3";
+const WARN_MSG = "flex items-start gap-2 text-[13px] text-warning";
+/* =============================================================================
+   SCREEN 1: DEVICES (home, "/")   and   SCREEN 2: ADD DEVICE ("/add")
+   ============================================================================= */
+
+function App() {
+  const r = route();
+  const page = r.name === "add" ? AddPage() : r.name === "device" ? DevicePage(r) : DevicesPage();
+  return page + Overlays() + Toasts() + PrototypePanel();
+}
+
+// ---------------------------------------------------------------------------
+// Devices
+// ---------------------------------------------------------------------------
+S.ui.bri = {}; // brightness being dragged, per device (not yet sent)
+
+const DEVICE_CARD = cn(CARD, "relative transition-colors hover:border-foreground/20");
+const CARD_LINK =
+  "truncate text-[15px] font-semibold after:absolute after:inset-0 after:rounded-lg after:content-[''] focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-ring";
+
+function DevicesPage() {
+  const list = q("devices", api.listDevices, { ttl: 15000 }).data;
+  const header = Header(
+    when(list && list.length, `<a href="#/add" data-nav="/add" class="${button({ size: "sm" })}">${icon("plus")}Add device</a>`),
+  );
+  let body;
+  if (!list) {
+    body = `<div class="grid gap-3 md:grid-cols-2">${[0, 1, 2]
+      .map(
+        () => `<div class="${CARD} p-4"><div class="flex items-center gap-3">${skel("h-10 w-10 rounded-full")}<div class="flex flex-1 flex-col gap-2">${skel(
+          "h-4 w-32",
+        )}${skel("h-3 w-48")}</div>${skel("h-6 w-11 rounded-full")}</div>${skel("h-2 w-full", "mt-5")}</div>`,
+      )
+      .join("")}</div>`;
+  } else if (list.length === 0) {
+    body = `<div class="${CARD} flex flex-col items-center gap-4 px-6 py-14 text-center">
+      ${StrandMark("h-5 w-16")}
+      <div class="flex max-w-sm flex-col gap-1.5"><h2 class="text-lg font-semibold">No devices yet</h2>
+        <p class="text-sm text-muted-foreground">Strand finds the WLED controllers on your network and lets you set them up and control them from one place.</p></div>
+      <a href="#/add" data-nav="/add" class="${button({ size: "lg" })}">${icon("search")}Find devices</a>
+    </div>`;
+  } else {
+    body = `<div class="grid gap-3 md:grid-cols-2">${list.map((d) => (d.online ? OnlineCard(d) : OfflineCard(d))).join("")}</div>`;
+  }
+  return `${header}<main class="${page({ pt: "pt-6" })}">
+    <div class="mb-5 flex items-baseline justify-between gap-3">
+      <h1 class="text-xl font-semibold tracking-tight">Devices</h1>
+      ${when(list && list.length, () => `<p class="text-[13px] tabular-nums text-muted-foreground">${list.filter((d) => d.online).length} of ${list.length} online</p>`)}
+    </div>
+    ${body}
+  </main>`;
+}
+
+function OnlineCard(d) {
+  const s = q(`${d.id}:state`, () => api.getState(d.id)).data;
+  const bri = S.ui.bri[d.id] ?? s?.bri ?? 128;
+  return `<article class="${DEVICE_CARD}">
+    <div class="flex items-center gap-3 p-4 pb-3">
+      ${Lamp({ on: s?.on, bri, online: true })}
+      <div class="flex min-w-0 flex-1 flex-col gap-0.5">
+        <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+          <a href="#/devices/${d.id}" data-nav="/devices/${d.id}" class="${CARD_LINK}">${esc(d.name)}</a>
+          ${when(d.pinLocked, `<span class="relative z-10">${LockBadge()}</span>`)}
+        </div>
+        <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5">${StatusText(d)}<span class="truncate font-mono text-xs text-muted-foreground">${esc(d.host)}</span></div>
+      </div>
+      <div class="relative z-10">${
+        s ? Switch({ checked: s.on, label: `Turn ${d.name} ${s.on ? "off" : "on"}`, action: "power", data: `data-id="${d.id}"` }) : skel("h-6 w-11 rounded-full")
+      }</div>
+    </div>
+    <div class="relative z-10 mx-4 mb-3 flex items-center gap-3">
+      ${icon("sun", cn("size-4", s?.on ? "text-foreground" : "text-muted-foreground"))}
+      ${s ? Slider({ value: bri, label: `${d.name} brightness`, input: "briDrag", change: "briCommit", data: `data-id="${d.id}"` }) : skel("h-1.5 flex-1")}
+      <span class="w-10 shrink-0 text-right text-[13px] tabular-nums text-muted-foreground">${s ? `${briToPct(bri)}%` : ""}</span>
+    </div>
+  </article>`;
+}
+
+function OfflineCard(d) {
+  const busy = S.ui.retrying === d.id;
+  return `<article class="${cn(DEVICE_CARD, "bg-card/50")}">
+    <div class="flex items-center gap-3 p-4">
+      ${Lamp({ on: false, bri: 0, online: false, dim: true })}
+      <div class="flex min-w-0 flex-1 flex-col gap-0.5">
+        <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+          <a href="#/devices/${d.id}" data-nav="/devices/${d.id}" class="${cn(CARD_LINK, "text-muted-foreground")}">${esc(d.name)}</a>
+          ${when(d.pinLocked, `<span class="relative z-10">${LockBadge()}</span>`)}
+        </div>
+        <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5">${StatusText(d)}<span class="truncate font-mono text-xs text-muted-foreground">${esc(d.host)}</span></div>
+      </div>
+      <button type="button" class="${button({ variant: "outline", size: "sm", className: "relative z-10" })}" data-a="retry" data-id="${d.id}"${busy ? " disabled" : ""}>${
+        busy ? spinner() : icon("rotate-cw")
+      }Retry</button>
+      ${icon("chevron-right", "hidden size-4 text-muted-foreground sm:block")}
+    </div>
+  </article>`;
+}
+
+async function patchLight(id, patch) {
+  const key = `${id}:state`;
+  const prev = S.cache[key]?.data;
+  if (prev) setCache(key, { ...prev, ...patch }); // optimistic
+  render();
+  try {
+    setCache(key, await api.patchState(id, patch));
+  } catch (e) {
+    if (prev) setCache(key, prev);
+    toast("error", "Couldn't change the lights", e.message);
+  }
+  render();
+}
+A.power = (el) => patchLight(el.dataset.id, { on: el.getAttribute("aria-checked") !== "true" });
+A.briDrag = (el) => {
+  S.ui.bri[el.dataset.id] = Number(el.value);
+  render();
+};
+A.briCommit = (el) => {
+  const id = el.dataset.id;
+  delete S.ui.bri[id];
+  patchLight(id, { bri: Number(el.value), on: true }); // moving brightness also turns the lights on
+};
+A.retry = async (el) => {
+  const id = el.dataset.id;
+  const name = (S.cache.devices?.data ?? []).find((d) => d.id === id)?.name ?? "The device";
+  S.ui.retrying = id;
+  render();
+  try {
+    await api.getInfo(id);
+    toast("success", `${name} is back online`);
+  } catch {
+    toast("error", `${name} still isn't responding`, "Check that it has power and is in range of your Wi-Fi.");
+  }
+  S.ui.retrying = null;
+  invalidate((k) => k === "devices" || k.startsWith(id));
+};
+
+// ---------------------------------------------------------------------------
+// Add device
+// ---------------------------------------------------------------------------
+function resetAddPage() {
+  delete S.cache.discovery;
+  S.ui.adding = null;
+  S.ui.manual = { host: "", busy: false, error: null, found: null };
+}
+
+function AddPage() {
+  const disc = q("discovery", api.discover);
+  const scanning = disc.fetching || disc.status === "loading";
+  const results = disc.data ?? [];
+  const m = S.ui.manual;
+  return `${Header()}<main class="${page({ max: "max-w-3xl", pt: "pt-4", extra: "flex flex-col gap-8" })}">
+    <div class="flex flex-col gap-3">
+      <a href="#/" data-nav="/" class="${BACK_LINK} self-start">${icon("arrow-left")}Devices</a>
+      <h1 class="text-xl font-semibold tracking-tight">Add a device</h1>
+    </div>
+
+    <section aria-labelledby="found-h" class="flex flex-col gap-3">
+      <div class="flex items-center justify-between gap-3">
+        <div class="flex flex-col gap-0.5"><h2 id="found-h" class="text-sm font-semibold">On your network</h2>
+          <p class="text-[13px] text-muted-foreground" aria-live="polite">${scanning ? "Looking for WLED controllers…" : `${results.length} found`}</p></div>
+        <button type="button" class="${button({ variant: "outline", size: "sm" })}" data-a="scanAgain"${scanning ? " disabled" : ""}>${icon(
+          "rotate-cw",
+          cn("size-4", scanning && "animate-spin"),
+        )}Scan again</button>
+      </div>
+      ${
+        scanning
+          ? `<div class="flex flex-col gap-2">${[0, 1, 2]
+              .map(() => `<div class="${CARD} flex items-center gap-3 p-4"><div class="flex flex-1 flex-col gap-2">${skel("h-4 w-28")}${skel("h-3 w-56 max-w-full")}</div>${skel("h-9 w-16")}</div>`)
+              .join("")}</div>`
+          : results.length === 0
+            ? `<div class="${CARD} flex gap-3 p-4">${icon("wifi-off", "mt-0.5 size-5 text-muted-foreground")}<div class="flex flex-col gap-1">
+                <p class="font-medium">No devices found</p>
+                <p class="text-[13px] text-muted-foreground">Discovery only finds controllers on the same network as the Strand server. If your device is on another network or VLAN, add it by address below.</p></div></div>`
+            : `<ul class="flex flex-col gap-2">${results.map((d) => `<li>${ResultCard(d, "Add")}</li>`).join("")}</ul>`
+      }
+    </section>
+
+    <section class="${CARD}">
+      <div class="${CARD_HEADER}"><div class="flex flex-col gap-1"><h2 class="text-sm font-semibold leading-tight tracking-tight">Add by address</h2>
+        <p class="${CARD_DESCRIPTION}">An IP address or hostname like wled-porch.local, for devices discovery can't see.</p></div></div>
+      <div class="flex flex-col gap-3 p-4 pt-0 sm:p-5 sm:pt-0">
+        <form class="flex flex-col gap-2" data-submit="probe" novalidate>
+          <label for="manual-host" class="${LABEL}">Hostname or IP</label>
+          <div class="flex flex-col gap-2 sm:flex-row">
+            <input id="manual-host" class="${INPUT} font-mono" value="${esc(m.host)}" placeholder="192.168.1.90" autocapitalize="none" autocorrect="off" spellcheck="false" inputmode="url"
+              data-in="manualHost" aria-describedby="manual-host-msg"${attr(m.error, "aria-invalid", "true")}${m.busy ? " disabled" : ""}>
+            <button type="submit" class="${button({ variant: "secondary", className: "sm:w-32" })}"${m.busy ? " disabled" : ""}>${m.busy ? `${spinner()}Checking…` : "Check"}</button>
+          </div>
+          <p id="manual-host-msg" role="alert" class="${FORM_MESSAGE}">${esc(m.error ?? "")}</p>
+        </form>
+        ${when(m.found, () => ResultCard(m.found, "Add this device"))}
+      </div>
+    </section>
+  </main>`;
+}
+
+function ResultCard(d, label) {
+  const busy = S.ui.adding === d.mac;
+  return `<div class="${cn(CARD, d.alreadyAdded && "bg-card/50")}"><div class="flex items-center gap-3 p-4">
+    <div class="flex min-w-0 flex-1 flex-col gap-1">
+      <div class="flex flex-wrap items-center gap-2"><span class="${cn("font-semibold", d.alreadyAdded && "text-muted-foreground")}">${esc(d.name)}</span>
+        ${when(d.alreadyAdded, `<span class="${badge("outline")}">${icon("check")}Added</span>`)}</div>
+      <p class="flex flex-wrap gap-x-2 text-[13px] tabular-nums text-muted-foreground">
+        <span class="font-mono">${esc(d.ip)}</span><span aria-hidden="true">·</span><span>WLED ${esc(d.ver)}</span><span aria-hidden="true">·</span><span>${d.ledCount} LEDs</span><span aria-hidden="true">·</span><span>${archLabel(d.arch)}</span>
+      </p>
+      ${when(
+        d.name === "WLED" && !d.alreadyAdded,
+        `<p class="flex items-center gap-1.5 text-[13px] text-muted-foreground">${icon("info", "size-3.5")}Still has its factory name. You can rename it after adding.</p>`,
+      )}
+    </div>
+    ${when(
+      !d.alreadyAdded,
+      `<button type="button" class="${button({ size: "sm" })}" data-a="addDevice" data-host="${esc(d.host)}" data-mac="${d.mac}" aria-label="${esc(label)} ${esc(d.name)}"${
+        S.ui.adding ? " disabled" : ""
+      }>${busy ? spinner() : icon("plus")}${label}</button>`,
+    )}
+  </div></div>`;
+}
+
+A.scanAgain = () => invalidate((k) => k === "discovery");
+A.manualHost = (el) => {
+  S.ui.manual = { ...S.ui.manual, host: el.value, error: null };
+  render();
+};
+A.probe = async () => {
+  const m = S.ui.manual;
+  if (!m.host.trim()) {
+    S.ui.manual = { ...m, error: "Enter a hostname or IP address." };
+    return render();
+  }
+  S.ui.manual = { ...m, busy: true, error: null, found: null };
+  render();
+  try {
+    S.ui.manual = { ...S.ui.manual, busy: false, found: await api.probeHost(m.host) };
+  } catch (e) {
+    S.ui.manual = { ...S.ui.manual, busy: false, error: e.message };
+  }
+  render();
+};
+A.addDevice = async (el) => {
+  S.ui.adding = el.dataset.mac;
+  render();
+  try {
+    const dev = await api.addDevice(el.dataset.host);
+    navigate("/");
+    toast("success", `Added ${dev.name}`, dev.name === "WLED" ? "Give it a name in Settings › Device." : "");
+    invalidate((k) => k === "devices");
+  } catch (e) {
+    toast("error", "Couldn't add that device", e.message);
+  }
+  S.ui.adding = null;
+  render();
+};
+/* =============================================================================
+   SCREEN 3: DEVICE PAGE ("/devices/:id")
+   SCREEN 4: SETTINGS OVERVIEW ("/devices/:id/settings")
+   SECTIONS: Device · System · Advanced  (LED Hardware, Network, Sync: own blocks)
+   ============================================================================= */
+
+const BANNER = "flex flex-wrap items-center gap-3 rounded-lg border p-3";
+const PANEL_CENTER = "flex flex-col items-center gap-3 px-6 py-14 text-center";
+
+function DevicePage(r) {
+  const devs = q("devices", api.listDevices, { ttl: 15000 });
+  if (!devs.data) {
+    return `${Header()}<main class="${page({ pt: "pt-6", extra: "flex flex-col gap-2" })}">${skel("h-8 w-24")}${skel("h-7 w-48")}${skel("h-4 w-40")}</main>`;
+  }
+  const d = devs.data.find((x) => x.id === r.id);
+  if (!d) {
+    return `${Header()}<main class="${page({ pt: "pt-10" })}"><div class="${CARD} flex flex-col items-start gap-3 p-6">
+      <h1 class="text-lg font-semibold">This device isn't in Strand</h1>
+      <p class="text-sm text-muted-foreground">It may have been removed. Add it again from the device list.</p>
+      <a href="#/" data-nav="/" class="${button({ variant: "outline" })}">Back to devices</a></div></main>`;
+  }
+  const rebooting = !!S.reboot[d.id];
+  const online = d.online && !rebooting;
+  const info = q(`${d.id}:info`, () => api.getInfo(d.id), { enabled: online, ttl: 10000 });
+  const tab = r.settings ? "settings" : r.tab;
+  const tabs = [
+    ["control", "palette", "Control", `/devices/${d.id}`],
+    ["segments", "layers", "Segments", `/devices/${d.id}?tab=segments`],
+    ["presets", "bookmark", "Presets", `/devices/${d.id}?tab=presets`],
+    ["settings", "settings-2", "Settings", `/devices/${d.id}/settings`],
+  ];
+
+  return `${Header()}<main class="${page({ pt: "pt-3" })}">
+    <a href="#/" data-nav="/" class="${BACK_LINK} mb-2">${icon("arrow-left")}Devices</a>
+
+    <div class="flex items-start gap-4">
+      <div class="flex min-w-0 flex-1 flex-col gap-1.5">
+        <div class="flex flex-wrap items-center gap-2">
+          <h1 class="truncate text-2xl font-semibold tracking-tight">${esc(d.name)}</h1>
+          ${when(
+            d.pinLocked,
+            `<button type="button" class="${badge("info", "cursor-pointer")}" data-a="unlock" data-id="${d.id}" title="Enter the PIN to unlock settings for 15 minutes">${icon("lock")}Settings locked</button>`,
+          )}
+        </div>
+        <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+          ${rebooting ? `<span class="inline-flex items-center gap-2 text-[13px] text-muted-foreground">${spinner("size-3.5")}Rebooting…</span>` : StatusText(d)}
+          <span class="font-mono text-xs text-muted-foreground">${esc(d.host)}</span>
+        </div>
+      </div>
+      ${when(online, () => HeaderPower(d))}
+    </div>
+
+    <div class="mt-4 flex flex-col gap-3">
+      ${when(!d.online && !rebooting, () => OfflineBanner(d))}
+      ${when(
+        online && info.data?.live,
+        `<div class="flex gap-3 rounded-lg border border-warning/40 bg-warning-muted p-3 text-sm">${icon("radio", "mt-0.5 size-4 text-warning")}<p>Receiving live data from another source. Changes may not be visible until it stops.</p></div>`,
+      )}
+      ${when(online, () => PendingRebootBanner(d))}
+    </div>
+
+    <nav role="tablist" aria-label="Device views" class="${TABS_LIST} mt-5">
+      ${tabs
+        .map(([id, ic, label, path]) => `<a role="tab" href="#${path}" data-nav="${path}" aria-selected="${tab === id}" class="${TABS_TRIGGER}">${icon(ic)}${label}</a>`)
+        .join("")}
+    </nav>
+
+    <div class="mt-5">${r.settings ? SettingsView(r, d) : Placeholder(tab)}</div>
+  </main>`;
+}
+
+function HeaderPower(d) {
+  const s = q(`${d.id}:state`, () => api.getState(d.id)).data;
+  if (!s) return skel("mt-1 h-6 w-11 rounded-full");
+  return `<div class="mt-1 flex items-center gap-2"><span class="hidden text-[13px] text-muted-foreground sm:inline">${s.on ? "On" : "Off"}</span>${Switch({
+    checked: s.on,
+    label: `Turn ${d.name} ${s.on ? "off" : "on"}`,
+    action: "power",
+    data: `data-id="${d.id}"`,
+  })}</div>`;
+}
+
+function OfflineBanner(d) {
+  const busy = S.ui.retrying === d.id;
+  return `<div class="${BANNER} bg-muted/50">${icon("wifi-off", "size-4 text-muted-foreground")}
+    <div class="min-w-0 flex-1 text-sm"><p class="font-medium">${esc(d.name)} is offline</p>
+      <p class="text-[13px] text-muted-foreground">Last seen ${relativeTime(d.lastSeen)} at <span class="font-mono">${esc(d.lastIp)}</span>. Settings are unavailable until it reconnects.</p></div>
+    <button type="button" class="${button({ variant: "outline", size: "sm" })}" data-a="retry" data-id="${d.id}"${busy ? " disabled" : ""}>${busy ? spinner() : icon("rotate-cw")}Retry</button>
+  </div>`;
+}
+
+function PendingRebootBanner(d) {
+  const p = q(`${d.id}:pending`, () => getPendingReboot(d.id)).data;
+  if (!p || !p.length) return "";
+  return `<div class="${BANNER}">${icon("rotate-cw", "size-4 text-muted-foreground")}
+    <p class="min-w-0 flex-1 text-sm">The new ${p.join(" and ")} ${p.length > 1 ? "take" : "takes"} effect after a reboot.</p>
+    <button type="button" class="${button({ variant: "outline", size: "sm" })}" data-a="askReboot" data-id="${d.id}">Reboot now</button>
+  </div>`;
+}
+
+function Placeholder(tab) {
+  const [ic, label] = tab === "segments" ? ["layers", "Segments"] : tab === "presets" ? ["bookmark", "Presets"] : ["palette", "Light control"];
+  return `<div class="${CARD} ${PANEL_CENTER} border-dashed py-16">${icon(ic, "size-6 text-muted-foreground")}<p class="font-medium">${label}</p><p class="max-w-xs text-sm text-muted-foreground">Designed in the next round.</p></div>`;
+}
+
+A.unlock = (el) => {
+  const name = (S.cache.devices?.data ?? []).find((d) => d.id === el.dataset.id)?.name;
+  askPin(el.dataset.id).then(
+    () => toast("success", `${name} unlocked for 15 minutes`),
+    () => {},
+  );
+};
+A.askReboot = (el) => {
+  const d = (S.cache.devices?.data ?? []).find((x) => x.id === el.dataset.id);
+  S.modal = { type: "reboot", deviceId: d.id, name: d.name };
+  render();
+};
+
+// ---------------------------------------------------------------------------
+// Settings overview: section list (+ selected section on desktop)
+// ---------------------------------------------------------------------------
+const SECTIONS = [
+  { id: "device", title: "Device", icon: "lightbulb" },
+  { id: "led-hardware", title: "LED Hardware", icon: "cable" },
+  { id: "network", title: "Network", icon: "wifi" },
+  { id: "sync", title: "Sync", icon: "repeat-2" },
+  { id: "system", title: "System", icon: "cpu" },
+  { id: "advanced", title: "Advanced", icon: "external-link" },
+];
+
+function groupsText(mask) {
+  const g = [1, 2, 3, 4, 5, 6, 7, 8].filter((n) => mask & (1 << (n - 1)));
+  if (!g.length) return "";
+  const list = g.length > 2 ? `${g.slice(0, -1).join(", ")} and ${g.at(-1)}` : g.join(" and ");
+  return `${g.length > 1 ? "groups" : "group"} ${list}`;
+}
+
+function sectionSummary(id, cfg, info) {
+  if (id === "advanced") return "Open the WLED settings for everything else";
+  if (id === "system") return info ? `WLED ${info.ver} · ${archLabel(info.arch)} · up ${uptimeShort(info.uptime)}` : null;
+  if (!cfg) return null;
+  if (id === "device") return `${cfg.id.name} · ${cfg.def.on ? `turns on at boot to ${briToPct(cfg.def.bri)}%` : "stays off at boot"}`;
+  if (id === "led-hardware") {
+    const n = cfg.hw.led.ins.length;
+    const total = cfg.hw.led.ins.reduce((t, o) => t + o.len, 0);
+    return `${n} ${n === 1 ? "output" : "outputs"} · ${total} LEDs · ${cfg.hw.led.maxpwr ? `${formatAmps(cfg.hw.led.maxpwr)} limit` : "no current limit"}`;
+  }
+  if (id === "network") return [cfg.nw.ins[0]?.ssid, info?.ip, cfg.id.mdns ? `${cfg.id.mdns}.local` : null].filter(Boolean).join(" · ");
+  if (id === "sync") {
+    const s = cfg.if.sync;
+    return `${s.send.en ? `Sending to ${groupsText(s.send.grp)}` : "Not sending"} · ${s.recv.grp ? `receiving from ${groupsText(s.recv.grp)}` : "not receiving"}`;
+  }
+  return null;
+}
+
+function SettingsView(r, d) {
+  const base = `/devices/${d.id}/settings`;
+  const known = SECTIONS.find((s) => s.id === r.section);
+  if (r.section && !known) {
+    return `<div class="${CARD} p-6"><p class="font-medium">There's no settings section called "${esc(r.section)}".</p>
+      <a href="#${base}" data-nav="${base}" class="${button({ variant: "link", size: "inline" })}">Back to settings</a></div>`;
+  }
+  // Phone: the list and each section are separate routes.
+  if (!S.desktop) {
+    if (!known) return SectionList(d, null);
+    return `<a href="#${base}" data-nav="${base}" class="${BACK_LINK} mb-2">${icon("arrow-left")}Settings</a>${SectionView(known.id, d)}`;
+  }
+  // Desktop: list on the left, selected section (default: Device) on the right.
+  const active = known?.id ?? "device";
+  return `<div class="grid grid-cols-[280px_minmax(0,1fr)] items-start gap-8">
+    <div class="sticky top-[calc(env(safe-area-inset-top,0px)+72px)]">${SectionList(d, active)}</div>
+    <div class="min-w-0">${SectionView(active, d)}</div>
+  </div>`;
+}
+
+function SectionList(d, active) {
+  const online = d.online && !S.reboot[d.id];
+  const cfg = q(`${d.id}:config`, () => api.getConfig(d.id), { enabled: online }).data;
+  const info = q(`${d.id}:info`, () => api.getInfo(d.id), { enabled: online, ttl: 10000 }).data;
+  return `<nav aria-label="Settings sections"><ul class="flex flex-col overflow-hidden rounded-lg border bg-card">${SECTIONS.map((s, i) => {
+    const disabled = !online && s.id !== "advanced";
+    const isActive = active === s.id;
+    const text = disabled ? "Unavailable while offline" : sectionSummary(s.id, cfg, info);
+    const inner = `<span class="${cn(
+      "flex h-9 w-9 shrink-0 items-center justify-center rounded-md border",
+      isActive ? "border-primary/50 bg-primary/10 text-primary" : "bg-muted",
+    )}">${icon(s.icon)}</span>
+      <span class="flex min-w-0 flex-1 flex-col gap-0.5"><span class="text-sm font-medium">${s.title}</span>
+        <span class="line-clamp-2 text-[13px] leading-snug text-muted-foreground">${text === null ? skel("mt-1 h-3 w-40 max-w-full") : esc(text)}</span></span>
+      ${icon("chevron-right", "size-4 text-muted-foreground")}`;
+    const row = cn("flex min-h-[60px] items-center gap-3 px-3 py-2.5 transition-colors", i > 0 && "border-t", isActive ? "bg-accent" : "hover:bg-accent/60");
+    const path = `/devices/${d.id}/settings/${s.id}`;
+    return `<li>${
+      disabled
+        ? `<div aria-disabled="true" class="${cn(row, "cursor-not-allowed opacity-50")}">${inner}</div>`
+        : `<a href="#${path}" data-nav="${path}"${attr(isActive, "aria-current", "page")} class="${cn(
+            row,
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+          )}">${inner}</a>`
+    }</li>`;
+  }).join("")}</ul></nav>`;
+}
+
+function SectionView(id, d) {
+  if (id === "system") return SystemSection(d);
+  if (id === "advanced") return AdvancedSection(d);
+  if (S.reconnect && S.reconnect.deviceId === d.id && id === "network") return ReconnectView(d);
+  // Config-backed sections: load GET config, show skeletons, keep a disabled form if the device drops mid-edit.
+  const online = d.online && !S.reboot[d.id];
+  const key = `${d.id}:${id}`;
+  const hasForm = S.form?.key === key;
+  const cfg = q(`${d.id}:config`, () => api.getConfig(d.id), { enabled: online });
+  if (!hasForm && (!cfg.data || cfg.fetching)) return online && cfg.status !== "error" ? SectionSkeleton() : OfflineSection();
+  const ctx = { d, key, offline: !online };
+  if (id === "device") return DeviceSection(cfg.data, ctx);
+  if (id === "led-hardware") return LedSection(cfg.data, ctx);
+  if (id === "network") return NetworkSection(cfg.data, ctx);
+  if (id === "sync") return SyncSection(cfg.data, ctx);
+  return "";
+}
+
+function OfflineSection() {
+  return `<div class="${CARD} ${PANEL_CENTER} border-dashed py-12">${icon("wifi-off", "size-5 text-muted-foreground")}<p class="font-medium">Settings are unavailable while the device is offline</p><p class="max-w-sm text-sm text-muted-foreground">They'll load again as soon as it reconnects.</p></div>`;
+}
+function SectionSkeleton() {
+  return `<div class="flex flex-col gap-4" aria-busy="true" aria-label="Loading">${skel("h-6 w-40")}${skel("h-4 w-72 max-w-full")}${[0, 1]
+    .map(() => `<div class="${CARD} flex flex-col gap-4 p-5">${skel("h-4 w-32")}${skel("h-10 w-full")}${skel("h-10 w-full")}</div>`)
+    .join("")}</div>`;
+}
+
+// Opening a settings section marks its config stale so it loads fresh (with skeletons).
+const _navigate = navigate;
+navigate = function (path, opts) {
+  const m = path.match(/^\/devices\/([^/?]+)\/settings/);
+  const changing = S.path.split("?")[0] !== path.split("?")[0];
+  _navigate(path, opts);
+  if (m && changing && S.path === path && S.cache[`${m[1]}:config`]) S.cache[`${m[1]}:config`].stale = true;
+};
+
+// ---------------------------------------------------------------------------
+// Section: Device
+// ---------------------------------------------------------------------------
+function DeviceSection(config, { d, key, offline }) {
+  const f = useForm(key, () => ({ name: config.id.name, def: { ...config.def } }));
+  const v = f.draft;
+  const name = v.name.trim();
+  const nameError = !name ? "Give the device a name." : name.length > 32 ? `Keep it to 32 characters (${name.length} now).` : "";
+  const presets = q(`${d.id}:presets`, () => api.getPresets(d.id), { enabled: !offline });
+  const disabled = f.saving || offline;
+
+  return `<div>
+    ${SectionHead("Device", "What this controller is called and how it starts up.")}
+    <fieldset class="${FIELDSET}"${disabled ? " disabled" : ""}>
+      ${SettingsCard({
+        body: Field({
+          id: "device-name",
+          label: "Device name",
+          control: `<input id="device-name" class="${INPUT}" value="${esc(v.name)}" maxlength="40" autocomplete="off" data-in="field" data-path="name" aria-describedby="device-name-desc device-name-msg"${attr(
+            nameError,
+            "aria-invalid",
+            "true",
+          )}>`,
+          help: `Also the name other WLED devices, Home Assistant and other integrations see. <span class="tabular-nums">${name.length}/32</span>`,
+          error: nameError,
+        }),
+      })}
+      ${SettingsCard({
+        title: "When powered on",
+        description: "What the lights do when the controller gets power or restarts.",
+        body: `
+          ${SwitchRow({ id: "def-on", label: "Turn lights on at boot", control: Switch({ id: "def-on", checked: v.def.on, path: "def.on" }) })}
+          <div class="flex flex-col gap-3">
+            <div class="flex items-baseline justify-between gap-3"><label for="def-bri" class="text-sm font-medium">Boot brightness</label>
+              <span class="text-sm tabular-nums">${briToPct(v.def.bri)}% <span class="text-[13px] text-muted-foreground">· ${v.def.bri} of 255</span></span></div>
+            ${Slider({ id: "def-bri", value: v.def.bri, label: "Boot brightness", path: "def.bri", disabled })}
+          </div>
+          ${Field({
+            id: "def-ps",
+            label: "Boot preset",
+            control: presets.data
+              ? Select({
+                  id: "def-ps",
+                  value: v.def.ps,
+                  path: "def.ps",
+                  options: [{ v: 0, label: "None" }, ...presets.data.map((p) => ({ v: p.id, label: p.name }))],
+                  disabled: disabled || presets.data.length === 0,
+                })
+              : skel("h-10 w-full"),
+            help:
+              presets.data && presets.data.length === 0
+                ? "This device has no presets yet. Save one from the Presets tab to start with it."
+                : "Starts this preset instead of the last color and effect.",
+          })}`,
+      })}
+    </fieldset>
+    ${SaveBar({ dirty: formDirty(f), saving: f.saving, errorCount: nameError ? 1 : 0, save: "saveDevice" })}
+    <div class="${SEPARATOR} my-8"></div>
+    <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div class="flex flex-col gap-1"><p class="text-sm font-medium">Remove from this app</p>
+        <p class="text-[13px] text-muted-foreground">Strand stops showing this device. Nothing on the device changes.</p></div>
+      <button type="button" class="${button({ variant: "destructive-outline" })}" data-a="askRemove" data-id="${d.id}">${icon("trash-2")}Remove device</button>
+    </div>
+  </div>`;
+}
+
+A.discard = () => {
+  if (!S.form) return;
+  S.form.draft = deepClone(S.form.base);
+  S.ui.open = {};
+  render();
+};
+A.saveDevice = async () => {
+  const f = S.form;
+  const id = f.key.split(":")[0];
+  const fresh = await saveSection(id, "Device settings", { id: { name: f.draft.name.trim() }, def: f.draft.def });
+  if (fresh && S.form === f) {
+    f.base = { name: fresh.id.name, def: { ...fresh.def } };
+    f.draft = deepClone(f.base);
+    render();
+  }
+};
+A.askRemove = (el) => {
+  const d = S.cache.devices.data.find((x) => x.id === el.dataset.id);
+  S.modal = { type: "remove", deviceId: d.id, name: d.name };
+  render();
+};
+
+// ---------------------------------------------------------------------------
+// Section: System (read-only, refreshed every 10 s, uptime ticks live)
+// ---------------------------------------------------------------------------
+function systemRows(info, uptime) {
+  return [
+    ["WLED version", `${info.ver} (build ${info.vid})`],
+    ["Hardware", `${archLabel(info.arch)} · ${info.clock} MHz · ${info.flash} MB flash`],
+    ["IP address", info.ip],
+    ["MAC address", formatMac(info.mac)],
+    ["Uptime", uptimeLong(uptime)],
+    ["Wi-Fi signal", formatRssi(info.wifi.rssi)],
+    ["Free memory", `${formatKB(info.freeheap)}${info.psram ? ` · PSRAM ${formatMB(info.psram)}` : ""}`],
+    ["Storage", `${info.fs.u} / ${info.fs.t} kB`],
+    ["LEDs", `${info.leds.count} LEDs · ${info.leds.fps} FPS`],
+    ["Current", info.leds.maxpwr ? `${(info.leds.pwr / 1000).toFixed(1)} A of ${formatAmps(info.leds.maxpwr)}` : "Limiter off"],
+  ];
+}
+
+function SystemSection(d) {
+  const rebooting = !!S.reboot[d.id];
+  const online = d.online && !rebooting;
+  const iq = q(`${d.id}:info`, () => api.getInfo(d.id), { enabled: online, ttl: 10000 });
+  const info = iq.data;
+  const uptime = info ? info.uptime + Math.max(0, Math.floor((Date.now() - iq.at) / 1000)) : 0;
+  const ROW = "flex flex-col gap-1 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4";
+  let body;
+  if (rebooting) {
+    body = `<div role="status" aria-live="polite" class="${CARD} ${PANEL_CENTER}">${spinner("size-7 text-primary")}<p class="text-lg font-semibold">Rebooting…</p><p class="text-sm text-muted-foreground">Waiting for ${esc(
+      d.name,
+    )} to answer again. This takes about 10 seconds.</p></div>`;
+  } else if (!online && !info) {
+    body = OfflineSection();
+  } else {
+    const rows = info
+      ? systemRows(info, uptime)
+          .map(([k, v], i) => {
+            let val = esc(v);
+            if (k === "IP address")
+              val = `<span class="inline-flex items-center gap-1"><span class="font-mono">${esc(v)}</span><button type="button" class="${button({
+                variant: "ghost",
+                size: "icon-sm",
+              })}" aria-label="Copy IP address" data-a="copy" data-text="${esc(v)}" data-what="IP address">${icon("copy")}</button></span>`;
+            if (k === "MAC address") val = `<span class="font-mono">${esc(v)}</span>`;
+            if (k === "Storage")
+              val = `<span class="flex items-center gap-3 sm:justify-end">${ProgressBar((info.fs.u / info.fs.t) * 100, { className: "h-1.5 w-28", label: "Storage used" })}${esc(v)}</span>`;
+            return `<div class="${cn(ROW, i > 0 && "border-t")}"><dt class="text-[13px] text-muted-foreground">${k}</dt><dd class="text-sm tabular-nums sm:text-right">${val}</dd></div>`;
+          })
+          .join("")
+      : Array.from({ length: 10 }, (_, i) => `<div class="${cn(ROW, i > 0 && "border-t")}">${skel("h-4 w-28")}${skel("h-4 w-40")}</div>`).join("");
+    body = `<div class="flex flex-col gap-4">
+      <dl class="${CARD} m-0">${rows}</dl>
+      <div class="flex flex-col gap-2 sm:flex-row">
+        <button type="button" class="${button({ variant: "outline" })}" data-a="askReboot" data-id="${d.id}"${online ? "" : " disabled"}>${icon("power")}Reboot device</button>
+        <button type="button" class="${button({ variant: "outline" })}" data-a="copyDiag" data-id="${d.id}"${info ? "" : " disabled"}>${icon("clipboard-copy")}Copy diagnostics</button>
+      </div>
+    </div>`;
+  }
+  return `<div>${SectionHead("System", "What this controller is running, refreshed every 10 seconds.")}${body}</div>`;
+}
+
+function copyText(text, what) {
+  // Must run inside the click handler; falls back to a selectable text box when blocked.
+  navigator.clipboard.writeText(text).then(
+    () => toast("success", `${what} copied`),
+    () => {
+      S.modal = { type: "copy", text };
+      render();
+    },
+  );
+}
+A.copy = (el) => copyText(el.dataset.text, el.dataset.what);
+A.copyDiag = (el) => {
+  const id = el.dataset.id;
+  const e = S.cache[`${id}:info`];
+  const name = S.cache.devices.data.find((x) => x.id === id).name;
+  const uptime = e.data.uptime + Math.floor((Date.now() - e.at) / 1000);
+  const text = [`${name} (Strand diagnostics, ${new Date().toISOString()})`, ...systemRows(e.data, uptime).map(([k, v]) => `${k}: ${v}`)].join("\n");
+  copyText(text, "Diagnostics");
+};
+
+// ---------------------------------------------------------------------------
+// Section: Advanced (escape hatch to WLED's own settings pages)
+// ---------------------------------------------------------------------------
+function AdvancedSection(d) {
+  const info = q(`${d.id}:info`, () => api.getInfo(d.id), { enabled: d.online, ttl: 10000 }).data;
+  const url = `http://${info?.ip ?? d.lastIp}/settings`;
+  const items = [
+    "Time, sunrise and schedules",
+    "Buttons and IR remotes",
+    "2D matrices",
+    "Usermods",
+    "MQTT",
+    "Home Assistant and other integrations",
+    "Firmware updates",
+    "Security and the settings PIN",
+  ];
+  return `<div>${SectionHead("Advanced", "Some WLED settings aren't in Strand yet. You can change them in WLED's own settings pages.")}
+    <div class="${CARD} flex flex-col gap-5 p-4 sm:p-5">
+      <div class="flex flex-col gap-2"><h3 class="text-sm font-medium">Only in the WLED settings for now</h3>
+        <ul class="grid gap-x-6 gap-y-1.5 text-sm text-muted-foreground sm:grid-cols-2">${items.map((x) => `<li class="flex gap-2"><span aria-hidden="true">·</span>${x}</li>`).join("")}</ul></div>
+      <div class="flex flex-col gap-3 border-t pt-5">
+        <a href="${esc(url)}" target="_blank" rel="noreferrer" class="${button({ className: "self-start" })}">${icon("external-link")}Open WLED Advanced UI</a>
+        <p class="text-[13px] text-muted-foreground">Opens <span class="font-mono text-foreground">${esc(url)}</span></p>
+        <p class="flex items-start gap-2 text-[13px] text-muted-foreground">${icon("info", "mt-0.5 size-4")}This opens the device directly, so it only works from your home network. Over Tailscale or a remote proxy, WLED may refuse to save changes.</p>
+      </div>
+    </div></div>`;
+}
+/* =============================================================================
+   SECTION: LED HARDWARE ("/devices/:id/settings/led-hardware")
+   Pure logic (pin slots, auto starts, memory, recommended supply, save diff)
+   lives in the "LED model" block above; this block is layout and wiring.
+   ============================================================================= */
+
+const BOOT_WARNING = "May stop the board from booting if the strip pulls this pin.";
+
+function ledErrors(d, caps) {
+  const e = {};
+  const typeOf = (i) => caps.ledTypes.find((t) => t.i === i);
+  d.outs.forEach((o, i) => {
+    const t = typeOf(o.type);
+    const slots = pinSlots(t);
+    slots.forEach((s, j) => {
+      if ((o.pin[j] ?? -1) < 0) e[`o${i}.pin${j}`] = slots.length > 1 ? `Choose a pin for ${s}.` : "Choose a pin.";
+    });
+    if (isDigital(t)) {
+      if (!Number.isInteger(o.len) || o.len < 1) e[`o${i}.len`] = "Enter how many LEDs are on this output.";
+      else if (o.len > caps.limits.maxLedsPerOutput) e[`o${i}.len`] = `One output can drive up to ${caps.limits.maxLedsPerOutput.toLocaleString()} LEDs.`;
+    }
+    if (o.customStart && (!Number.isInteger(o.start) || o.start < 0)) e[`o${i}.start`] = "Enter a whole number, 0 or more.";
+    if (!Number.isInteger(o.skip) || o.skip < 0 || o.skip > 255) e[`o${i}.skip`] = "Enter 0 to 255.";
+    if (o.ledmaCustom && (!Number.isInteger(o.ledma) || o.ledma < 1 || o.ledma > 254)) e[`o${i}.ledma`] = "Enter 1 to 254 mA.";
+  });
+  const total = d.outs.reduce((t, o) => t + (Number.isFinite(o.len) ? o.len : 0), 0);
+  if (total > caps.limits.maxLeds) e.total = `This chip handles up to ${caps.limits.maxLeds.toLocaleString()} LEDs in total.`;
+  if (d.maxpwr !== 0 && (!Number.isFinite(d.maxpwr) || d.maxpwr < 250 || d.maxpwr > 65000)) e.maxpwr = "Enter 0.25 to 65 A.";
+  return e;
+}
+
+function ledTotals(d, caps) {
+  const typeOf = (i) => caps.ledTypes.find((t) => t.i === i);
+  const leds = d.outs.reduce((t, o) => t + (Number.isFinite(o.len) ? o.len : 0), 0);
+  const mem = d.outs.reduce((t, o) => t + outputMemory(o, typeOf(o.type)), 0);
+  const digital = d.outs.filter((o) => isDigital(typeOf(o.type))).length;
+  const pwmPins = d.outs.filter((o) => kindOf(typeOf(o.type)) === "pwm").reduce((t, o) => t + o.pin.length, 0);
+  return { leds, mem, memPct: (mem / caps.limits.ledMemoryBytes) * 100, digital, pwmPins };
+}
+
+const ampsText = (mA) => (Number.isFinite(mA) ? String(Math.round(mA / 10) / 100) : "");
+const STAT_LABEL = "text-xs font-medium uppercase tracking-wider text-muted-foreground";
+
+function LedSection(config, { d, key, offline }) {
+  const caps = q(`${d.id}:caps`, () => api.getCapabilities(d.id), { enabled: !offline }).data;
+  const pinsRes = q(`${d.id}:pins`, () => api.getPins(d.id), { enabled: !offline }).data;
+  if (!caps || !pinsRes) return offline ? OfflineSection() : SectionSkeleton();
+  const pins = pinsRes.pins;
+  const f = useForm(key, () => toDraft(config));
+  if (f.ui.lastLimit === undefined) f.ui.lastLimit = config.hw.led.maxpwr;
+  if (f.ui.amps === undefined) f.ui.amps = ampsText(f.draft.maxpwr);
+  f.ui.caps = caps;
+  f.ui.pins = pins;
+
+  const v = f.draft;
+  const errors = ledErrors(v, caps);
+  const errorCount = Object.values(errors).filter(Boolean).length;
+  const totals = ledTotals(v, caps);
+  const limiterOn = v.maxpwr !== 0;
+  const disabled = f.saving || offline;
+  const info = q(`${d.id}:info`, () => api.getInfo(d.id), { enabled: !offline, ttl: 5000 }).data;
+  const supply = recommendedSupply(v.outs, caps.ledTypes);
+  const savedLimit = config.hw.led.maxpwr;
+  const over = totals.memPct > 100;
+  // Memory bar: neutral below 60 %, amber 60–90 %, red above 90 %.
+  const memBar = totals.memPct > 90 ? "h-full bg-danger transition-all" : totals.memPct >= 60 ? "h-full bg-warning transition-all" : PROGRESS_INDICATOR;
+  const memText = totals.memPct > 90 ? "text-danger" : totals.memPct >= 60 ? "text-warning" : "";
+
+  const stats = `<div class="${CARD} mb-4 grid grid-cols-2 sm:grid-cols-4">
+    <div class="flex flex-col gap-1 p-4"><span class="${STAT_LABEL}">LEDs</span><span class="${cn(
+      "text-lg font-semibold leading-tight tabular-nums",
+      errors.total && "text-danger",
+    )}">${totals.leds.toLocaleString()}</span><span class="text-xs text-muted-foreground">of ${caps.limits.maxLeds.toLocaleString()} max</span></div>
+    <div class="flex flex-col gap-1 border-l p-4"><span class="${STAT_LABEL}">Outputs</span><span class="text-lg font-semibold leading-tight tabular-nums">${v.outs.length}</span><span class="text-xs text-muted-foreground">${totals.digital} of ${caps.limits.maxDigitalOutputs} digital</span></div>
+    <div class="flex flex-col gap-1 border-t p-4 sm:border-l sm:border-t-0"><span class="${STAT_LABEL}">Current</span>${
+      !limiterOn || !savedLimit
+        ? `<span class="text-base font-semibold leading-tight text-muted-foreground">Not measured</span><span class="text-xs text-muted-foreground">Turn on the limiter to estimate</span>`
+        : `<span class="text-lg font-semibold leading-tight tabular-nums">${info ? `${(info.leds.pwr / 1000).toFixed(1)} A now` : "…"}</span><span class="text-xs text-muted-foreground">of ${formatAmps(
+            savedLimit,
+          )} limit</span>`
+    }</div>
+    <div class="flex flex-col gap-2 border-l border-t p-4 sm:border-t-0">
+      <div class="flex items-baseline justify-between gap-2"><span class="${STAT_LABEL}">LED memory</span><span class="${cn("text-sm font-medium tabular-nums", memText)}">${Math.round(totals.memPct)}%</span></div>
+      ${ProgressBar(totals.memPct, { indicator: memBar, label: `LED memory ${Math.round(totals.memPct)}% used` })}
+      <span class="text-xs tabular-nums text-muted-foreground">${(totals.mem / 1024).toFixed(1)} of ${(caps.limits.ledMemoryBytes / 1024).toFixed(0)} kB</span>
+    </div>
+  </div>
+  ${when(
+    over || errors.total,
+    `<p role="alert" class="-mt-2 mb-4 flex items-start gap-2 text-[13px] font-medium text-danger">${icon("triangle-alert", "mt-0.5 size-4")}${esc(
+      errors.total || "These outputs need more memory than this chip has. Use fewer LEDs or a type with fewer color channels.",
+    )}</p>`,
+  )}`;
+
+  const outputs = v.outs
+    .map((o, i) => {
+      const t = caps.ledTypes.find((x) => x.i === o.type);
+      const open = S.desktop && !!S.ui.open[`out:${o.key}`];
+      const hasError = Object.keys(errors).some((k) => k.startsWith(`o${i}.`));
+      const warnPin = o.pin.some((p) => pins.find((x) => x.p === p && x.c & 0x18));
+      const sep = `<span aria-hidden="true">·</span>`;
+      return `<li class="${cn(CARD, open && "border-foreground/25", hasError && "border-danger/50")}">
+        <button type="button" class="flex w-full items-center gap-3 rounded-lg p-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" data-a="toggleOutput" data-key="${o.key}" aria-expanded="${open}">
+          <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border bg-muted text-sm font-semibold tabular-nums">${i + 1}</span>
+          <span class="flex min-w-0 flex-1 flex-col gap-1">
+            <span class="flex flex-wrap items-center gap-2"><span class="font-medium">${esc(t?.n ?? `Type ${o.type}`)}</span>${when(hasError, `<span class="${badge("danger")}">Needs attention</span>`)}</span>
+            <span class="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[13px] tabular-nums text-muted-foreground">
+              <span class="inline-flex items-center gap-1 font-mono text-xs">${pinLabel(o.pin)}${when(warnPin, icon("triangle-alert", "size-3.5 text-warning"))}</span>
+              ${sep}<span>${rangeLabel(o)}</span>
+              ${when(isDigital(t), `${sep}<span>${COLOR_ORDERS[o.order & 15]}</span>`)}
+              ${when(o.rev, `${sep}<span class="inline-flex items-center gap-1">${icon("arrow-left-right", "size-3")}Reversed</span>`)}
+            </span>
+          </span>
+          ${icon(S.desktop ? "chevron-down" : "chevron-right", cn("size-4 text-muted-foreground transition-transform", open && "rotate-180"))}
+        </button>
+        ${when(open, () => `<div class="flex flex-col gap-5 border-t p-4 sm:p-5">${OutputEditor(i, f, errors, totals, disabled)}</div>`)}
+      </li>`;
+    })
+    .join("");
+
+  return `<div>
+    ${SectionHead("LED Hardware", "The strips and lights wired to this controller, and how much current they may draw.")}
+    ${stats}
+    <fieldset class="${FIELDSET}"${disabled ? " disabled" : ""}>
+      <div class="flex flex-col gap-2">
+        <div class="flex items-center justify-between gap-3"><h3 class="text-sm font-semibold">Outputs</h3>
+          <button type="button" class="${button({ variant: "outline", size: "sm" })}" data-a="addOutput"${totals.leds >= caps.limits.maxLeds ? " disabled" : ""}>${icon("plus")}Add output</button></div>
+        <ul class="flex flex-col gap-2">${outputs}</ul>
+      </div>
+      ${SettingsCard({
+        title: "Power limiter",
+        description: "Dims the whole device automatically so it never draws more than your power supply can give.",
+        body: `
+          ${SwitchRow({ id: "limiter", label: "Limit current", control: Switch({ id: "limiter", checked: limiterOn, action: "toggleLimiter" }) })}
+          ${when(
+            limiterOn,
+            () => `
+            <div class="${FORM_ITEM}">
+              <label for="maxpwr" class="${LABEL}">Power supply</label>
+              <div class="relative max-w-[12rem]"><input id="maxpwr" class="${INPUT} pr-10 tabular-nums" inputmode="decimal" value="${esc(f.ui.amps)}" data-in="ampsInput" aria-describedby="maxpwr-msg"${attr(
+                errors.maxpwr,
+                "aria-invalid",
+                "true",
+              )}><span class="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-muted-foreground">A</span></div>
+              ${when(errors.maxpwr, `<p id="maxpwr-msg" role="alert" class="${FORM_MESSAGE}">${errors.maxpwr}</p>`)}
+              ${when(
+                Number.isFinite(v.maxpwr) && v.maxpwr > 7200 && !errors.maxpwr,
+                `<p class="${WARN_MSG}">${icon("triangle-alert", "mt-0.5 size-4")}Make sure your wiring and power supply can handle this.</p>`,
+              )}
+            </div>
+            <div class="${SUBTLE_BOX} flex flex-col gap-3 sm:flex-row sm:items-center">
+              <div class="min-w-0 flex-1 text-sm"><p>Recommended supply: <span class="font-medium tabular-nums">${supply.typicalA} A</span></p>
+                <p class="text-[13px] text-muted-foreground">Enough for typical effects. Full white on every LED needs about <span class="tabular-nums">${supply.fullWhiteA} A</span>.</p></div>
+              <button type="button" class="${button({ variant: "secondary", size: "sm" })}" data-a="useRecommended" data-ma="${Math.round(supply.typicalA * 1000)}"${
+                v.maxpwr === Math.round(supply.typicalA * 1000) ? " disabled" : ""
+              }>Use ${supply.typicalA} A</button>
+            </div>`,
+          )}
+          ${Disclosure(
+            "led-adv",
+            "Advanced",
+            () => `
+            <div class="flex flex-col gap-3">
+              <div class="flex items-baseline justify-between gap-3"><label for="scale-bri" class="text-sm font-medium">Brightness factor</label><span class="text-sm tabular-nums">${v.scaleBri}%</span></div>
+              ${Slider({ id: "scale-bri", value: v.scaleBri, label: "Brightness factor", path: "scaleBri", disabled })}
+              <p class="${FORM_DESCRIPTION}">Scales every brightness value on this device. 100% leaves them as set.</p>
+            </div>`,
+          )}`,
+      })}
+    </fieldset>
+    ${SaveBar({
+      dirty: formDirty(f),
+      saving: f.saving,
+      errorCount,
+      blocked: over ? "Too much LED memory: reduce the LED count to save." : "",
+      save: "saveLed",
+      discard: "discardLed",
+    })}
+  </div>`;
+}
+
+/** The fields for one output. Rendered inline on desktop, in a bottom <Sheet> on phones. */
+function OutputEditor(i, f, errors, totals, disabled) {
+  const { caps, pins } = f.ui;
+  const all = f.draft.outs;
+  const o = all[i];
+  const t = caps.ledTypes.find((x) => x.i === o.type);
+  const kind = kindOf(t);
+  const digital = kind === "digital" || kind === "digital2";
+  const slots = pinSlots(t);
+  const id = (x) => `out${i}-${x}`;
+  const err = (x) => errors[`o${i}.${x}`] ?? "";
+  const prev = all[i - 1];
+  const prevEnd = i === 0 ? 0 : prev.start + (Number.isFinite(prev.len) ? prev.len : 0);
+  const data = `data-i="${i}"`;
+
+  // Which LED types this output may switch to, and why the others are disabled.
+  const digitalElsewhere = totals.digital - (digital ? 1 : 0);
+  const pwmElsewhere = totals.pwmPins - (kind === "pwm" ? o.pin.length : 0);
+  const why = (lt) => {
+    if (lt.i === o.type) return "";
+    const k = kindOf(lt);
+    if (k === "network" || k === "other") return " (set up in WLED Advanced UI)";
+    if ((k === "digital" || k === "digital2") && digitalElsewhere >= caps.limits.maxDigitalOutputs) return ` (chip has ${caps.limits.maxDigitalOutputs} digital outputs)`;
+    if (k === "pwm" && pwmElsewhere + lt.t.length > caps.limits.maxPwmPins) return " (not enough PWM channels left)";
+    return "";
+  };
+  const groups = [
+    ["Digital (1 wire)", "digital"],
+    ["Digital (2 wire)", "digital2"],
+    ["PWM", "pwm"],
+    ["On/Off relay", "relay"],
+    ["Network", "network"],
+  ]
+    .map(([label, k]) => ({
+      group: label,
+      options: caps.ledTypes.filter((lt) => kindOf(lt) === k).map((lt) => ({ v: lt.i, label: lt.n + why(lt), disabled: !!why(lt) })),
+    }))
+    .filter((g) => g.options.length);
+
+  const pinPickers = slots
+    .map((slot, j) => {
+      const opts = pinOptions(pins, caps, all, i, j, slots);
+      const chosen = opts.find((x) => x.p === o.pin[j]);
+      const warn = chosen?.warn
+        ? `<span tabindex="0" title="${BOOT_WARNING}" class="inline-flex cursor-help items-center gap-1 rounded text-xs text-warning focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">${icon(
+            "triangle-alert",
+            "size-3.5",
+          )}${chosen.warn === "boot" ? "Boot pin" : "Strapping pin"}</span>`
+        : "";
+      return Field({
+        id: id(`pin${j}`),
+        label: slots.length === 1 ? (kind === "relay" ? "Relay pin" : "Data pin") : slot,
+        trailing: warn,
+        control: Select({
+          id: id(`pin${j}`),
+          value: o.pin[j] ?? -1,
+          change: "outPin",
+          mono: true,
+          placeholder: "Choose a pin",
+          invalid: !!err(`pin${j}`),
+          data: `${data} data-j="${j}"`,
+          options: opts.map((x) => ({
+            v: x.p,
+            label: `GPIO ${x.p}${x.note ? ` · ${x.note}` : x.warn ? ` · ${x.warn} pin ⚠` : ""}`,
+            disabled: x.disabled,
+          })),
+        }),
+        error: err(`pin${j}`),
+      });
+    })
+    .join("");
+
+  const num = (fld, value) =>
+    `<input id="${id(fld)}" class="${INPUT} max-w-[10rem] tabular-nums" inputmode="numeric" value="${Number.isFinite(value) ? value : ""}" data-in="outField" data-f="${fld}" data-type="int" ${data} aria-describedby="${id(
+      fld,
+    )}-msg"${attr(err(fld), "aria-invalid", "true")}>`;
+
+  return `
+    ${Field({ id: id("type"), label: "LED type", control: Select({ id: id("type"), value: o.type, change: "outType", options: groups, data }) })}
+    <div class="${cn("grid gap-4", slots.length > 1 && "sm:grid-cols-2")}">${pinPickers}</div>
+    ${when(digital, () =>
+      Field({
+        id: id("len"),
+        label: "LED count",
+        control: num("len", o.len),
+        help: `<span class="tabular-nums">${totals.leds.toLocaleString()} of ${caps.limits.maxLeds.toLocaleString()} LEDs on this device</span>`,
+        error: err("len"),
+      }),
+    )}
+    <div class="flex flex-col gap-3">
+      ${SwitchRow({
+        id: id("cstart"),
+        label: "Custom start",
+        description: o.customStart ? "Set where this output begins in the LED index." : `Starts at LED ${prevEnd}${i > 0 ? `, right after Output ${i}` : ""}.`,
+        control: Switch({ id: id("cstart"), checked: o.customStart, action: "outCustomStart", data, disabled }),
+      })}
+      ${when(o.customStart, () => Field({ id: id("start"), label: "Start LED", srLabel: true, control: num("start", o.start), error: err("start") }))}
+    </div>
+    ${when(digital, () =>
+      Field({
+        id: id("order"),
+        label: "Color order",
+        control: Select({ id: id("order"), value: o.order & 15, change: "outOrder", className: "max-w-[12rem]", data, options: COLOR_ORDERS.map((c, k) => ({ v: k, label: c })) }),
+        help: "Not sure? Set to RGB and light it red; if it shows green, pick GRB.",
+      }),
+    )}
+    ${SwitchRow({
+      id: id("rev"),
+      label: "Reversed",
+      description: "Run effects from the far end of the strip.",
+      control: Switch({ id: id("rev"), checked: o.rev, action: "outRev", data, disabled }),
+    })}
+    ${when(digital && f.draft.maxpwr !== 0, () =>
+      Field({
+        id: id("ledma"),
+        label: "Power per LED",
+        control:
+          Select({
+            id: id("ledma"),
+            value: o.ledmaCustom ? "custom" : o.ledma,
+            change: "outLedma",
+            type: "str",
+            data,
+            options: [...LEDMA_PRESETS.map((p) => ({ v: p.v, label: p.label })), { v: "custom", label: "Custom" }],
+          }) +
+          when(
+            o.ledmaCustom,
+            () =>
+              `<div class="relative max-w-[10rem]"><input class="${INPUT} pr-12 tabular-nums" aria-label="Custom milliamps per LED" inputmode="numeric" value="${
+                Number.isFinite(o.ledma) ? o.ledma : ""
+              }" data-in="outField" data-f="ledma" data-type="int" ${data}${attr(err("ledma"), "aria-invalid", "true")}><span class="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-muted-foreground">mA</span></div>`,
+          ),
+        help: "Used to estimate current. Check your strip's datasheet for full-white draw.",
+        error: err("ledma"),
+      }),
+    )}
+    ${Disclosure(`skip:${o.key}`, "Advanced", () =>
+      Field({
+        id: id("skip"),
+        label: "Skip first LEDs",
+        control: num("skip", o.skip),
+        help: "Leaves the first LEDs dark, for example ones hidden inside an enclosure.",
+        error: err("skip"),
+      }),
+    )}
+    <div class="flex justify-end border-t pt-4">${
+      all.length > 1
+        ? `<button type="button" class="${button({ variant: "destructive-ghost", size: "sm" })}" data-a="removeOutput" ${data}>${icon("trash-2")}Remove output</button>`
+        : `<p class="text-[13px] text-muted-foreground">A device needs at least one output.</p>`
+    }</div>`;
+}
+
+// --- LED actions -------------------------------------------------------------
+function setOuts(fn) {
+  updateDraft((d) => ({ ...d, outs: autoStarts(fn(d.outs)) }));
+}
+function setOut(i, patch) {
+  setOuts((outs) => outs.map((o, k) => (k === i ? { ...o, ...patch } : o)));
+}
+A.toggleOutput = (el) => {
+  const k = `out:${el.dataset.key}`;
+  if (S.desktop) S.ui.open[k] = !S.ui.open[k];
+  else S.modal = { type: "output", key: el.dataset.key };
+  render();
+};
+A.outField = (el) => setOut(Number(el.dataset.i), { [el.dataset.f]: readValue(el) });
+A.outRev = (el) => setOut(Number(el.dataset.i), { rev: el.getAttribute("aria-checked") !== "true" });
+A.outCustomStart = (el) => setOut(Number(el.dataset.i), { customStart: el.getAttribute("aria-checked") !== "true" });
+A.outOrder = (el) => {
+  const i = Number(el.dataset.i);
+  setOut(i, { order: (S.form.draft.outs[i].order & 0xf0) | Number(el.value) });
+};
+A.outPin = (el) => {
+  const i = Number(el.dataset.i);
+  const pin = [...S.form.draft.outs[i].pin];
+  pin[Number(el.dataset.j)] = Number(el.value);
+  setOut(i, { pin });
+};
+A.outLedma = (el) => {
+  const i = Number(el.dataset.i);
+  const o = S.form.draft.outs[i];
+  if (el.value === "custom") setOut(i, { ledmaCustom: true, ledma: o.ledma === 255 ? 12 : o.ledma });
+  else setOut(i, { ledmaCustom: false, ledma: Number(el.value) });
+};
+A.outType = (el) => {
+  const i = Number(el.dataset.i);
+  const { caps, pins } = S.form.ui;
+  const all = S.form.draft.outs;
+  const o = all[i];
+  const nt = caps.ledTypes.find((x) => x.i === Number(el.value));
+  const next = pinSlots(nt).map((_, j) => o.pin[j] ?? -1);
+  // Fill new pickers with free pins so the form starts out valid.
+  next.forEach((p, j) => {
+    if (p < 0) next[j] = firstFreePin(pins, caps, all.filter((_, k) => k !== i), next.filter((x) => x >= 0));
+  });
+  setOut(i, { type: nt.i, pin: next, len: isDigital(nt) ? (o.len > 1 ? o.len : 30) : 1 });
+};
+A.addOutput = () => {
+  const { caps, pins } = S.form.ui;
+  const digitalOk = ledTotals(S.form.draft, caps).digital < caps.limits.maxDigitalOutputs;
+  const key = `n${Date.now()}`;
+  setOuts((outs) => [
+    ...outs,
+    { type: digitalOk ? 22 : 41, pin: [firstFreePin(pins, caps, outs)], start: 0, len: digitalOk ? 30 : 1, order: 0, rev: false, skip: 0, ledma: 55, key, customStart: false, ledmaCustom: false },
+  ]);
+  if (S.desktop) S.ui.open[`out:${key}`] = true;
+  else S.modal = { type: "output", key };
+  render();
+};
+A.removeOutput = (el) => {
+  const i = Number(el.dataset.i);
+  setOuts((outs) => outs.filter((_, k) => k !== i));
+  if (S.modal?.type === "output") S.modal = null;
+};
+A.toggleLimiter = () => {
+  const f = S.form;
+  if (f.draft.maxpwr !== 0) {
+    f.ui.lastLimit = f.draft.maxpwr;
+    updateDraft((d) => ({ ...d, maxpwr: 0 }));
+  } else {
+    const ma = f.ui.lastLimit || Math.round(recommendedSupply(f.draft.outs, f.ui.caps.ledTypes).typicalA * 1000) || 5000;
+    f.ui.amps = ampsText(ma);
+    updateDraft((d) => ({ ...d, maxpwr: ma }));
+  }
+};
+A.ampsInput = (el) => {
+  S.form.ui.amps = el.value;
+  const a = parseFloat(el.value.replace(",", "."));
+  const ok = /^\s*\d*([.,]\d*)?\s*$/.test(el.value) && Number.isFinite(a);
+  updateDraft((d) => ({ ...d, maxpwr: ok ? Math.round(a * 1000) : NaN }));
+};
+A.useRecommended = (el) => {
+  const ma = Number(el.dataset.ma);
+  S.form.ui.amps = ampsText(ma);
+  updateDraft((d) => ({ ...d, maxpwr: ma }));
+};
+A.discardLed = () => {
+  S.form.draft = deepClone(S.form.base);
+  S.form.ui.amps = ampsText(S.form.base.maxpwr);
+  S.ui.open = {};
+  render();
+};
+A.saveLed = () => {
+  const f = S.form;
+  if (outputsChanged(f.base, f.draft)) {
+    S.modal = { type: "confirmLed", lines: diffLines(f.base, f.draft, f.ui.caps.ledTypes) };
+    render();
+  } else doSaveLed();
+};
+async function doSaveLed() {
+  S.modal = null;
+  const f = S.form;
+  const id = f.key.split(":")[0];
+  const fresh = await saveSection(id, "LED hardware", { hw: { led: fromDraft(f.draft) }, light: { "scale-bri": f.draft.scaleBri } });
+  if (fresh && S.form === f) {
+    f.base = toDraft(fresh);
+    f.draft = deepClone(f.base);
+    f.ui.amps = ampsText(f.base.maxpwr);
+    S.ui.open = {};
+    render();
+  }
+}
+/* =============================================================================
+   SECTION: NETWORK ("/devices/:id/settings/network")
+   Disruptive fields carry a "Reconnects" or "After reboot" badge. Saving a
+   reconnect-type change goes through the confirm → progress → result flow.
+   ============================================================================= */
+
+const AP_BEHAVIORS = [
+  { v: 0, label: "When not connected after boot" },
+  { v: 1, label: "When disconnected" },
+  { v: 2, label: "Always" },
+  { v: 4, label: "Temporary, closes after 5 min" },
+];
+S.ui.showPw = {};
+
+function netToDraft(c) {
+  return {
+    nets: c.nw.ins.map((e, i) => {
+      const dhcp = isZeroIp(e.ip);
+      return {
+        key: `w${i}`, ssid: e.ssid, pskl: e.pskl, psk: null, secured: null,
+        mode: dhcp ? "dhcp" : "static",
+        ip: dhcp ? "" : ipToString(e.ip), gw: dhcp ? "" : ipToString(e.gw), sn: dhcp ? "255.255.255.0" : ipToString(e.sn),
+      };
+    }),
+    mdns: c.id.mdns,
+    ap: { ssid: c.ap.ssid, pskl: c.ap.pskl, psk: null, chan: c.ap.chan, behav: c.ap.behav, hide: c.ap.hide },
+  };
+}
+function netEntry(n) {
+  const st = n.mode === "static";
+  return {
+    ssid: n.ssid.trim(),
+    pskl: n.pskl,
+    ...(n.psk !== null ? { psk: n.psk } : {}),
+    ip: st ? parseIp(n.ip) ?? ZERO_IP : ZERO_IP,
+    gw: st ? parseIp(n.gw) ?? ZERO_IP : ZERO_IP,
+    sn: st ? parseIp(n.sn) ?? [255, 255, 255, 0] : [255, 255, 255, 0],
+  };
+}
+/** Exactly what the device receives; also what "has anything changed?" compares. */
+function netPatch(d) {
+  return {
+    id: { mdns: d.mdns.trim() },
+    nw: { ins: d.nets.map(netEntry) },
+    ap: { ssid: d.ap.ssid.trim(), pskl: d.ap.pskl, ...(d.ap.psk !== null ? { psk: d.ap.psk } : {}), chan: d.ap.chan, behav: d.ap.behav, hide: d.ap.hide },
+  };
+}
+function netClassify(base, d) {
+  const reconnect =
+    base.nets.map((n) => n.ssid.trim()).join("|") !== d.nets.map((n) => n.ssid.trim()).join("|") ||
+    d.nets.some((n) => n.psk !== null) ||
+    base.ap.ssid !== d.ap.ssid.trim() ||
+    d.ap.psk !== null ||
+    base.ap.chan !== d.ap.chan;
+  const ipKey = (x) => x.nets.map((n) => JSON.stringify([netEntry(n).ip, netEntry(n).gw, netEntry(n).sn])).join("|");
+  const reboot = ipKey(base) !== ipKey(d) || base.mdns !== d.mdns.trim();
+  return { reconnect, reboot };
+}
+function netErrors(d) {
+  const e = {};
+  const seen = new Set();
+  d.nets.forEach((n, i) => {
+    const ssid = n.ssid.trim();
+    if (!ssid) e[`n${i}.ssid`] = "Enter the network name.";
+    else if (ssid.length > 32) e[`n${i}.ssid`] = "Network names are at most 32 characters.";
+    else if (seen.has(ssid)) e[`n${i}.ssid`] = "This network is already in the list.";
+    seen.add(ssid);
+    if (n.psk !== null) {
+      if (n.psk.length > 0 && (n.psk.length < 8 || n.psk.length > 63)) e[`n${i}.psk`] = "Wi-Fi passwords are 8 to 63 characters.";
+      else if (n.psk.length === 0 && n.secured) e[`n${i}.psk`] = `Enter the password for ${ssid || "this network"}.`;
+    }
+    if (n.mode === "static") {
+      const ip = parseIp(n.ip), gw = parseIp(n.gw), sn = parseIp(n.sn);
+      if (!ip || isZeroIp(ip)) e[`n${i}.ip`] = "Enter an address like 192.168.1.50.";
+      if (!gw) e[`n${i}.gw`] = "Enter the router's address, like 192.168.1.1.";
+      if (!sn || !isValidSubnet(sn)) e[`n${i}.sn`] = "Enter a subnet mask like 255.255.255.0.";
+      if (ip && gw && sn && isValidSubnet(sn) && !ip.every((o, k) => (o & sn[k]) === (gw[k] & sn[k])))
+        e[`n${i}.gw`] = "The gateway must be on the same subnet as the address.";
+    }
+  });
+  const mdns = d.mdns.trim();
+  if (mdns && !/^[A-Za-z0-9-]+$/.test(mdns)) e.mdns = "Use letters, digits and hyphens only.";
+  else if (mdns.length > 32) e.mdns = "Keep it to 32 characters.";
+  else if (mdns.startsWith("-") || mdns.endsWith("-")) e.mdns = "It can't start or end with a hyphen.";
+  if (!d.ap.ssid.trim()) e["ap.ssid"] = "The access point needs a name.";
+  else if (d.ap.ssid.trim().length > 32) e["ap.ssid"] = "Keep it to 32 characters.";
+  if (d.ap.psk !== null && d.ap.psk.length > 0 && (d.ap.psk.length < 8 || d.ap.psk.length > 63))
+    e["ap.psk"] = "Use 8 to 63 characters, or leave it empty for an open access point.";
+  return e;
+}
+
+function NetworkSection(config, { d, key, offline }) {
+  const f = useForm(key, () => netToDraft(config), netPatch);
+  const v = f.draft;
+  const errors = netErrors(v);
+  const errorCount = Object.keys(errors).length;
+  const kinds = netClassify(f.base, v);
+  const disabled = f.saving || offline;
+  const info = q(`${d.id}:info`, () => api.getInfo(d.id), { enabled: !offline, ttl: 10000 }).data;
+  f.ui.currentIp = info?.ip ?? d.lastIp;
+  const KV_DT = "text-xs font-medium uppercase tracking-wider text-muted-foreground";
+
+  const current = `<section class="${CARD} p-4 sm:p-5">
+    <div class="mb-3 flex items-center justify-between gap-3"><h3 class="${CARD_TITLE}">Current connection</h3>${when(
+      info?.wifi.ap,
+      `<span class="${badge("warning")}">${icon("radio-tower")}Access point active</span>`,
+    )}</div>
+    ${
+      info
+        ? `<dl class="m-0 grid gap-x-6 gap-y-3 sm:grid-cols-2">
+        <div class="flex flex-col gap-0.5"><dt class="${KV_DT}">IP address</dt><dd class="m-0 font-mono text-sm">${esc(info.ip)}</dd></div>
+        <div class="flex flex-col gap-0.5"><dt class="${KV_DT}">Network</dt><dd class="m-0 text-sm">${esc(info.wifi.ssid ?? "—")}</dd></div>
+        <div class="flex flex-col gap-0.5"><dt class="${KV_DT}">Signal</dt><dd class="m-0 text-sm"><span class="flex items-center gap-2">${SignalBars(info.wifi.rssi)}<span class="tabular-nums">${formatRssi(
+          info.wifi.rssi,
+        )}</span></span>${ProgressBar(info.wifi.signal, { className: "mt-1.5 h-1", label: `Signal strength ${info.wifi.signal}%` })}</dd></div>
+        <div class="flex flex-col gap-0.5"><dt class="${KV_DT}">Band</dt><dd class="m-0 text-sm tabular-nums">${info.wifi.band.replace("GHz", " GHz")} · channel ${info.wifi.channel}</dd></div>
+      </dl>`
+        : `<div class="grid gap-3 sm:grid-cols-2">${[0, 1, 2, 3].map(() => skel("h-9 w-full")).join("")}</div>`
+    }
+  </section>`;
+
+  return `<div>
+    ${SectionHead("Network", "How this controller joins your Wi-Fi, and the backup network it creates when it can't.")}
+    <fieldset class="${FIELDSET}"${disabled ? " disabled" : ""}>
+      ${current}
+      ${SettingsCard({
+        title: "Wi-Fi networks",
+        description: "Up to three. The device joins the strongest one it can hear.",
+        action: `<button type="button" class="${button({ variant: "outline", size: "sm" })}" data-a="netAdd"${v.nets.length >= 3 ? " disabled" : ""}>${icon("plus")}Add</button>`,
+        body: v.nets.map((n, i) => NetEntry(n, i, v.nets.length, errors)).join(""),
+      })}
+      ${SettingsCard({
+        title: "Hostname",
+        description: "The name the device answers to on your network.",
+        body: Field({
+          id: "mdns",
+          label: "Hostname",
+          trailing: Consequence("reboot"),
+          control: `<div class="flex items-stretch"><input id="mdns" class="${INPUT} rounded-r-none font-mono" value="${esc(
+            v.mdns,
+          )}" data-in="field" data-path="mdns" autocapitalize="none" autocorrect="off" spellcheck="false" aria-describedby="mdns-desc mdns-msg"${attr(
+            errors.mdns,
+            "aria-invalid",
+            "true",
+          )}><span class="flex items-center rounded-r-md border border-l-0 bg-muted px-3 font-mono text-sm text-muted-foreground">.local</span></div>`,
+          error: errors.mdns,
+          help: v.mdns.trim() ? `Reachable at <span class="font-mono text-foreground">http://${esc(v.mdns.trim().toLowerCase())}.local</span>` : "",
+        }) +
+          when(
+            !v.mdns.trim(),
+            `<p class="${WARN_MSG} -mt-3">${icon("triangle-alert", "mt-0.5 size-4")}Empty turns off mDNS. Strand may take longer to find this device after its IP address changes.</p>`,
+          ),
+      })}
+      ${SettingsCard({
+        title: "Access point",
+        description: "The network this device creates when it can't join yours, so you can still reach it.",
+        body: `
+          ${Field({
+            id: "ap-ssid",
+            label: "Name",
+            trailing: Consequence("reconnects"),
+            control: `<input id="ap-ssid" class="${INPUT}" value="${esc(v.ap.ssid)}" data-in="field" data-path="ap.ssid" aria-describedby="ap-ssid-msg"${attr(errors["ap.ssid"], "aria-invalid", "true")}>`,
+            error: errors["ap.ssid"],
+          })}
+          ${SavedPassword({ id: "ap-psk", pskl: v.ap.pskl, psk: v.ap.psk, error: errors["ap.psk"], hint: "Leave empty for an open access point.", target: "ap" })}
+          <div class="grid gap-4 sm:grid-cols-[13rem_minmax(0,1fr)]">
+            ${Field({
+              id: "ap-chan",
+              label: "Channel",
+              trailing: Consequence("reconnects"),
+              control: Select({ id: "ap-chan", value: v.ap.chan, path: "ap.chan", className: "tabular-nums", options: Array.from({ length: 13 }, (_, k) => ({ v: k + 1, label: `Channel ${k + 1}` })) }),
+            })}
+            ${Field({
+              id: "ap-behav",
+              label: "Open access point",
+              control: Select({
+                id: "ap-behav",
+                value: v.ap.behav,
+                path: "ap.behav",
+                disabled: disabled || v.ap.behav === 3,
+                options: [...AP_BEHAVIORS, ...(v.ap.behav === 3 ? [{ v: 3, label: "Never" }] : [])],
+              }),
+            })}
+          </div>
+          ${Disclosure(
+            "ap-adv",
+            "Advanced",
+            () => `
+            ${SwitchRow({
+              id: "ap-never",
+              label: "Never open the access point",
+              description: `<span class="text-danger">If Wi-Fi fails, you won't be able to reach this device at all until you reflash it over USB.</span>`,
+              control: Switch({ id: "ap-never", checked: v.ap.behav === 3, action: "apNever" }),
+            })}
+            ${SwitchRow({
+              id: "ap-hide",
+              label: "Hide the access point name",
+              description: "It won't show up in Wi-Fi lists; you'd type its name to join.",
+              control: Switch({ id: "ap-hide", checked: v.ap.hide, path: "ap.hide" }),
+            })}`,
+          )}`,
+      })}
+    </fieldset>
+    ${SaveBar({ dirty: formDirty(f), saving: f.saving, errorCount, save: "saveNetwork", saveLabel: kinds.reconnect ? "Save & reconnect…" : "Save" })}
+  </div>`;
+}
+
+function NetEntry(n, i, count, errors) {
+  const id = (x) => `net${i}-${x}`;
+  const err = (x) => errors[`n${i}.${x}`] ?? "";
+  const data = `data-i="${i}"`;
+  return `<fieldset class="m-0 flex min-w-0 flex-col gap-4 rounded-md border p-3 sm:p-4">
+    <div class="flex items-center justify-between gap-2"><span class="text-xs font-medium uppercase tracking-wider text-muted-foreground">${count > 1 ? `Network ${i + 1}` : "Network"}</span>${when(
+      count > 1,
+      `<button type="button" class="${button({ variant: "destructive-ghost", size: "sm", className: "-mr-2" })}" data-a="netRemove" ${data}>${icon("trash-2")}Remove</button>`,
+    )}</div>
+    ${Field({
+      id: id("ssid"),
+      label: "Network name",
+      trailing: Consequence("reconnects"),
+      control: `<div class="flex gap-2"><input id="${id("ssid")}" class="${INPUT}" value="${esc(n.ssid)}" data-in="netField" data-f="ssid" ${data} autocapitalize="none" autocorrect="off" spellcheck="false" aria-describedby="${id(
+        "ssid",
+      )}-msg"${attr(err("ssid"), "aria-invalid", "true")}>
+        <button type="button" class="${button({ variant: "outline", className: "shrink-0" })}" data-a="openScan" ${data} aria-label="Scan for networks">${icon("search")}<span class="hidden sm:inline">Scan</span></button></div>`,
+      error: err("ssid"),
+    })}
+    ${SavedPassword({
+      id: id("psk"),
+      pskl: n.pskl,
+      psk: n.psk,
+      error: err("psk"),
+      hint: n.secured === false ? "This is an open network; no password needed." : "Leave empty for an open network.",
+      target: String(i),
+    })}
+    <div class="flex flex-col gap-3">
+      <div class="flex flex-wrap items-center gap-2"><span id="${id("mode")}" class="text-sm font-medium">IP address</span>${Consequence("reboot")}</div>
+      <div role="group" aria-labelledby="${id("mode")}" class="grid grid-cols-2 gap-1.5 sm:inline-grid sm:w-auto sm:self-start">
+        <button type="button" class="${TOGGLE_OUTLINE} h-10 whitespace-nowrap px-3 text-[13px] sm:text-sm" aria-pressed="${n.mode === "dhcp"}" data-a="netMode" data-v="dhcp" ${data}>Automatic (DHCP)</button>
+        <button type="button" class="${TOGGLE_OUTLINE} h-10 whitespace-nowrap px-3 text-[13px] sm:text-sm" aria-pressed="${n.mode === "static"}" data-a="netMode" data-v="static" ${data}>Static</button>
+      </div>
+      ${when(
+        n.mode === "static",
+        () =>
+          `<div class="grid gap-3 sm:grid-cols-3">${[
+            ["ip", "Address", "192.168.1.50"],
+            ["gw", "Gateway", "192.168.1.1"],
+            ["sn", "Subnet mask", "255.255.255.0"],
+          ]
+            .map(([fld, label, ph]) =>
+              Field({
+                id: id(fld),
+                label,
+                control: `<input id="${id(fld)}" class="${INPUT} font-mono" inputmode="decimal" placeholder="${ph}" value="${esc(n[fld])}" data-in="netField" data-f="${fld}" ${data} aria-describedby="${id(
+                  fld,
+                )}-msg"${attr(err(fld), "aria-invalid", "true")}>`,
+                error: err(fld),
+              }),
+            )
+            .join("")}</div>`,
+      )}
+    </div>
+  </fieldset>`;
+}
+
+/** Password with a "saved" state: untouched keeps the stored password; "Change" reveals an empty input. */
+function SavedPassword({ id, pskl, psk, error, hint, target }) {
+  const show = !!S.ui.showPw[id];
+  const control =
+    psk === null
+      ? `<div class="flex h-10 items-center justify-between gap-3 rounded-md border border-dashed border-input px-3">
+          <span class="flex items-center gap-2 text-sm">${pskl > 0 ? `${icon("circle-check", "size-4 text-success")}Password saved` : `<span class="text-muted-foreground">No password (open)</span>`}</span>
+          <button type="button" class="${button({ variant: "link", size: "inline", className: "text-sm" })}" data-a="pwChange" data-target="${target}">${pskl > 0 ? "Change" : "Set password"}</button>
+        </div>`
+      : `<div class="relative"><input id="${id}" class="${INPUT} pr-11" type="${show ? "text" : "password"}" autocomplete="new-password" value="${esc(psk)}" data-in="pwInput" data-target="${target}" aria-describedby="${id}-desc ${id}-msg"${attr(
+          error,
+          "aria-invalid",
+          "true",
+        )}><button type="button" class="absolute inset-y-0 right-0 flex w-10 items-center justify-center rounded-r-md text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" data-a="pwReveal" data-id="${id}" aria-label="${
+          show ? "Hide" : "Show"
+        } password">${icon(show ? "eye-off" : "eye")}</button></div>
+        <div class="flex flex-wrap items-center justify-between gap-2"><p id="${id}-desc" class="${FORM_DESCRIPTION}">${hint}</p>${when(
+          pskl > 0,
+          `<button type="button" class="${button({ variant: "link", size: "inline", className: "text-[13px]" })}" data-a="pwKeep" data-target="${target}">Keep saved password</button>`,
+        )}</div>`;
+  return Field({ id, label: "Password", trailing: Consequence("reconnects"), control, error });
+}
+
+function ReconnectView(d) {
+  const rc = S.reconnect;
+  if (rc.phase === "reconnecting") {
+    const secs = (Date.now() - rc.started) / 1000;
+    return `<div role="status" aria-live="polite" class="${CARD} ${PANEL_CENTER} gap-4">${spinner("size-8 text-primary")}
+      <div class="flex flex-col gap-1"><p class="text-lg font-semibold">Reconnecting to ${esc(rc.target)}…</p>
+        <p class="text-sm text-muted-foreground">${esc(d.name)} is restarting its Wi-Fi. This usually takes under 30 seconds.</p></div>
+      <p class="font-mono text-sm tabular-nums text-muted-foreground">${elapsed(secs)}</p>
+      ${ProgressBar((secs / 45) * 100, { className: "h-1 max-w-xs", indicator: "h-full bg-primary transition-all" })}
+    </div>`;
+  }
+  if (rc.phase === "back") {
+    const changed = rc.ip !== rc.oldIp;
+    return `<div role="status" class="${CARD} ${PANEL_CENTER} gap-4">${icon("circle-check", "size-8 text-success")}
+      <div class="flex flex-col gap-1"><p class="text-lg font-semibold">Back online at <span class="font-mono">${esc(rc.ip)}</span></p>
+        <p class="max-w-sm text-sm text-muted-foreground">${
+          changed
+            ? `Its IP address changed from ${esc(rc.oldIp)}. Strand found it again by its MAC address, so nothing else needs updating.`
+            : `${esc(d.name)} is connected with the new settings.`
+        }</p></div>
+      <button type="button" class="${button()}" data-a="reconnectDone">Done</button>
+    </div>`;
+  }
+  return `<div class="${CARD} flex flex-col gap-5 p-6">
+    <div class="flex items-start gap-3">${icon("wifi-off", "mt-0.5 size-6 text-danger")}
+      <div class="flex flex-col gap-1"><p class="text-lg font-semibold">${esc(d.name)} hasn't come back.</p>
+        <p class="text-sm text-muted-foreground">It's still listed in Strand as offline. It may not have been able to join ${esc(rc.target)}.</p></div></div>
+    <ol class="flex list-decimal flex-col gap-2 pl-5 text-sm marker:text-muted-foreground">
+      <li>Wait a minute. Some routers are slow to hand out an address.</li>
+      <li>Check the network name and password you entered.</li>
+      <li>Join the device's access point <span class="font-medium">"${esc(rc.apName)}"</span> from your phone or laptop, then open <span class="font-mono">http://4.3.2.1</span> to fix its Wi-Fi settings.</li>
+    </ol>
+    <div class="flex flex-wrap gap-2"><button type="button" class="${button()}" data-a="keepWaiting">Keep waiting</button>
+      <button type="button" class="${button({ variant: "outline" })}" data-a="reconnectDone">Back to settings</button></div>
+  </div>`;
+}
+// --- Network actions -----------------------------------------------------------
+function setNet(i, patch) {
+  updateDraft((d) => ({ ...d, nets: d.nets.map((n, k) => (k === i ? { ...n, ...patch } : n)) }));
+}
+function setPsk(target, psk) {
+  if (target === "ap") updateDraft((d) => ({ ...d, ap: { ...d.ap, psk } }));
+  else setNet(Number(target), { psk });
+}
+A.netField = (el) => {
+  const f = el.dataset.f;
+  setNet(Number(el.dataset.i), f === "ssid" ? { ssid: el.value, secured: null } : { [f]: el.value });
+};
+A.pwChange = (el) => {
+  setPsk(el.dataset.target, "");
+  S.focus = el.dataset.target === "ap" ? "ap-psk" : `net${el.dataset.target}-psk`;
+};
+A.pwKeep = (el) => setPsk(el.dataset.target, null);
+A.pwInput = (el) => setPsk(el.dataset.target, el.value);
+A.pwReveal = (el) => {
+  S.ui.showPw[el.dataset.id] = !S.ui.showPw[el.dataset.id];
+  render();
+};
+A.netMode = (el) => {
+  const i = Number(el.dataset.i);
+  const n = S.form.draft.nets[i];
+  if (el.dataset.v === "static" && !n.ip) {
+    const guess = parseIp(S.form.ui.currentIp ?? "");
+    setNet(i, { mode: "static", ip: guess ? ipToString(guess) : "", gw: guess ? `${guess[0]}.${guess[1]}.${guess[2]}.1` : "", sn: "255.255.255.0" });
+  } else setNet(i, { mode: el.dataset.v });
+};
+A.netAdd = () =>
+  updateDraft((d) => ({
+    ...d,
+    nets: [...d.nets, { key: `n${Date.now()}`, ssid: "", pskl: 0, psk: "", secured: null, mode: "dhcp", ip: "", gw: "", sn: "255.255.255.0" }],
+  }));
+A.netRemove = (el) => updateDraft((d) => ({ ...d, nets: d.nets.filter((_, k) => k !== Number(el.dataset.i)) }));
+A.apNever = (el) => updateDraft((d) => ({ ...d, ap: { ...d.ap, behav: el.getAttribute("aria-checked") === "true" ? 0 : 3 } }));
+
+A.openScan = async (el) => {
+  const i = Number(el.dataset.i);
+  const deviceId = S.form.key.split(":")[0];
+  S.modal = { type: "scan", i, deviceId, nets: null, error: null };
+  render();
+  runScan();
+};
+async function runScan() {
+  const m = S.modal;
+  m.nets = null;
+  m.error = null;
+  render();
+  try {
+    const r = await api.scanNetworks(m.deviceId);
+    if (S.modal === m) m.nets = [...r.networks].sort((a, b) => b.rssi - a.rssi);
+  } catch (e) {
+    if (S.modal === m) m.error = e.message;
+  }
+  render();
+}
+A.rescan = () => runScan();
+A.pickNet = (el) => {
+  const m = S.modal;
+  const n = m.nets.find((x) => x.ssid === el.dataset.ssid);
+  const cur = S.form.draft.nets[m.i];
+  const changed = cur.ssid !== n.ssid;
+  S.modal = null;
+  setNet(m.i, { ssid: n.ssid, secured: n.enc > 0, psk: n.enc === 0 ? "" : changed ? "" : cur.psk });
+  if (n.enc > 0 && changed) S.focus = `net${m.i}-psk`;
+};
+
+A.saveNetwork = () => {
+  const f = S.form;
+  const k = netClassify(f.base, f.draft);
+  if (k.reconnect) S.modal = { type: "confirmReconnect", alsoReboot: k.reboot, apName: f.base.ap.ssid };
+  else if (k.reboot) S.modal = { type: "confirmRebootSave" };
+  else return doSaveNetwork(false);
+  render();
+};
+async function doSaveNetwork(thenReboot) {
+  S.modal = null;
+  const f = S.form;
+  const id = f.key.split(":")[0];
+  const fresh = await saveSection(id, "Network settings", netPatch(f.draft), { quiet: thenReboot });
+  if (!fresh) return;
+  if (S.form === f) {
+    f.base = netToDraft(fresh);
+    f.draft = deepClone(f.base);
+  }
+  if (thenReboot) rebootDevice(id, fresh.id.name);
+  render();
+}
+async function doReconnect() {
+  S.modal = null;
+  const f = S.form;
+  const id = f.key.split(":")[0];
+  const base = f.base;
+  const target = (f.draft.nets.find((n) => !base.nets.some((b) => b.ssid === n.ssid.trim())) ?? f.draft.nets[0]).ssid.trim();
+  const oldIp = S.cache[`${id}:info`]?.data?.ip ?? "";
+  const fresh = await saveSection(id, "Network settings", netPatch(f.draft), { quiet: true });
+  if (!fresh) return;
+  f.base = netToDraft(fresh);
+  f.draft = deepClone(f.base);
+  S.reconnect = { deviceId: id, phase: "reconnecting", started: Date.now(), target, oldIp, apName: fresh.ap.ssid, seenDown: false };
+  pollReconnect(S.reconnect);
+  render();
+}
+
+/** Poll every 2 s until the device answers again; give up after 45 s. */
+function pollReconnect(rc) {
+  const tick = async () => {
+    if (S.reconnect !== rc || rc.phase !== "reconnecting") return;
+    const since = Date.now() - rc.started;
+    if (since > 45000) {
+      rc.phase = "lost";
+      return render();
+    }
+    try {
+      const info = await api.getInfo(rc.deviceId);
+      if (rc.seenDown || since > 6000) {
+        rc.phase = "back";
+        rc.ip = info.ip;
+        setCache(`${rc.deviceId}:info`, info);
+        invalidate((k) => (k.startsWith(rc.deviceId) && !k.endsWith(":info")) || k === "devices");
+        return render();
+      }
+    } catch {
+      rc.seenDown = true;
+    }
+    setTimeout(tick, 2000);
+  };
+  setTimeout(tick, 2000);
+}
+
+A.reconnectDone = () => {
+  S.reconnect = null;
+  render();
+};
+A.keepWaiting = () => {
+  const rc = S.reconnect;
+  rc.phase = "reconnecting";
+  rc.started = Date.now();
+  pollReconnect(rc);
+  render();
+};
+/* =============================================================================
+   SECTION: SYNC ("/devices/:id/settings/sync")
+   Group masks are shown as 8 toggle chips; nobody sees a bitmask.
+   ============================================================================= */
+
+const GROUPS = [1, 2, 3, 4, 5, 6, 7, 8];
+const syncToDraft = (c) => ({
+  send: { ...c.if.sync.send },
+  recv: { ...c.if.sync.recv, grp: c.if.sync.recv.grp || 1 }, // remembers groups while receiving is off
+  recvOn: c.if.sync.recv.grp > 0,
+});
+const syncPatch = (d) => ({ if: { sync: { send: d.send, recv: { ...d.recv, grp: d.recvOn ? d.recv.grp : 0 } } } });
+
+function SyncSection(config, { d, key, offline }) {
+  const f = useForm(key, () => syncToDraft(config), syncPatch);
+  const v = f.draft;
+  const errors = {
+    sendGrp: v.send.en && v.send.grp === 0 ? "Pick at least one group to send to." : "",
+    recvGrp: v.recvOn && v.recv.grp === 0 ? "Pick at least one group, or turn receiving off." : "",
+  };
+  const errorCount = Object.values(errors).filter(Boolean).length;
+  const disabled = f.saving || offline;
+
+  // <ToggleGroup type="multiple" variant="outline"> of sync groups 1–8
+  const chips = (which, mask, label, error) => `<div class="flex flex-col gap-2.5">
+    <span id="${which}-grp-label" class="text-sm font-medium">${label}</span>
+    <div role="group" aria-labelledby="${which}-grp-label" class="grid grid-cols-8 gap-1.5 sm:flex sm:flex-wrap">${GROUPS.map(
+      (g) =>
+        `<button type="button" class="${TOGGLE_OUTLINE} h-11 min-w-0 px-0 tabular-nums sm:w-11" aria-pressed="${!!(mask & (1 << (g - 1)))}" aria-label="Group ${g}" data-a="toggleGroup" data-which="${which}" data-g="${g}">${g}</button>`,
+    ).join("")}</div>
+    ${when(error, `<p role="alert" class="${FORM_MESSAGE}">${error}</p>`)}
+  </div>`;
+
+  const applies = [
+    ["bri", "Brightness"],
+    ["col", "Colors"],
+    ["fx", "Effects"],
+    ["pal", "Palette"],
+  ];
+
+  return `<div>
+    ${SectionHead("Sync", "WLED devices on the same network can mirror each other's changes using sync groups. Changes here apply right away, with no reboot.")}
+    <fieldset class="${FIELDSET}"${disabled ? " disabled" : ""}>
+      ${SettingsCard({
+        title: "Send",
+        body: `
+          ${SwitchRow({
+            id: "send-en",
+            label: "Send changes to other devices",
+            description: "This is the setting at boot. The quick sync toggle on the control screen only changes it until the next reboot.",
+            control: Switch({ id: "send-en", checked: v.send.en, path: "send.en" }),
+          })}
+          ${when(
+            v.send.en,
+            () => `
+            ${SwitchRow({ id: "send-dir", label: "When changed from the app or API", control: Switch({ id: "send-dir", checked: v.send.dir, path: "send.dir" }) })}
+            ${SwitchRow({ id: "send-btn", label: "When a button or IR remote is used", control: Switch({ id: "send-btn", checked: v.send.btn, path: "send.btn" }) })}
+            ${chips("send", v.send.grp, "Send to groups", errors.sendGrp)}`,
+          )}`,
+      })}
+      ${SettingsCard({
+        title: "Receive",
+        body: `
+          ${SwitchRow({ id: "recv-on", label: "Receive changes from other devices", control: Switch({ id: "recv-on", checked: v.recvOn, path: "recvOn" }) })}
+          ${when(
+            v.recvOn,
+            () => `
+            ${chips("recv", v.recv.grp, "Listen to groups", errors.recvGrp)}
+            <fieldset class="m-0 flex flex-col gap-3 border-0 p-0"><legend class="mb-3 text-sm font-medium">Apply</legend>
+              <div class="grid grid-cols-2 gap-4 sm:grid-cols-4">${applies
+                .map(
+                  ([k, label]) => `<label for="recv-${k}" class="flex min-h-6 cursor-pointer items-center gap-2.5 text-sm">
+                    <button type="button" role="checkbox" id="recv-${k}" class="${CHECKBOX}" aria-checked="${v.recv[k]}" data-a="toggleField" data-path="recv.${k}">${when(
+                      v.recv[k],
+                      icon("check", "size-3.5 [stroke-width:3]"),
+                    )}</button>${label}</label>`,
+                )
+                .join("")}</div>
+            </fieldset>
+            ${Disclosure(
+              "sync-adv",
+              "Advanced",
+              () => `
+              ${SwitchRow({
+                id: "recv-seg",
+                label: "Apply segment options",
+                description: "Mirror per-segment settings like effect speed and mirroring.",
+                control: Switch({ id: "recv-seg", checked: v.recv.seg, path: "recv.seg" }),
+              })}
+              ${SwitchRow({
+                id: "recv-sb",
+                label: "Apply segment bounds",
+                description: "Copy where each segment starts and stops. Only useful when the strips match.",
+                control: Switch({ id: "recv-sb", checked: v.recv.sb, path: "recv.sb" }),
+              })}`,
+            )}`,
+          )}`,
+      })}
+      ${SyncPreview(d, v)}
+    </fieldset>
+    ${SaveBar({ dirty: formDirty(f), saving: f.saving, errorCount, save: "saveSync" })}
+  </div>`;
+}
+
+/** Who mirrors whom, from every device's sync groups (this one from the unsaved draft). */
+function SyncPreview(d, v) {
+  const others = (S.cache.devices?.data ?? []).filter((x) => x.id !== d.id);
+  const mySend = v.send.en ? v.send.grp : 0;
+  const myRecv = v.recvOn ? v.recv.grp : 0;
+  const row = (ic, name, text) =>
+    `<li class="flex items-center gap-3 py-2.5">${ic}<span class="min-w-0 flex-1 text-sm"><span class="font-medium">${esc(name)}</span><span class="text-muted-foreground"> · ${text}</span></span></li>`;
+  const rows = others
+    .map((o) => {
+      if (!o.online) return row(icon("wifi-off", "size-4 text-muted-foreground"), o.name, "offline, can't check");
+      const c = q(`${o.id}:config`, () => api.getConfig(o.id), { ttl: 30000 }).data;
+      if (!c) return row(skel("h-4 w-4"), o.name, "checking…");
+      const s = c.if.sync;
+      const out = mySend & s.recv.grp;
+      const inn = (s.send.en ? s.send.grp : 0) & myRecv;
+      if (!out && !inn) return "";
+      if (out && inn) return row(icon("arrow-left-right", "size-4 text-primary"), o.name, `mirror each other (${groupsText(out | inn)})`);
+      if (out) return row(icon("arrow-right", "size-4 text-primary"), o.name, `follows ${esc(d.name)} (${groupsText(out)})`);
+      return row(icon("arrow-left", "size-4 text-primary"), o.name, `${esc(d.name)} follows it (${groupsText(inn)})`);
+    })
+    .filter(Boolean);
+  return SettingsCard({
+    title: "Devices in sync",
+    description: "Other devices in Strand that share a group with this one, including unsaved changes.",
+    body: rows.length
+      ? `<ul class="-my-1 flex flex-col divide-y">${rows.join("")}</ul>`
+      : `<p class="text-sm text-muted-foreground">No other devices in Strand share a sync group with ${esc(d.name)}.</p>`,
+  });
+}
+
+A.toggleGroup = (el) => {
+  const bit = 1 << (Number(el.dataset.g) - 1);
+  const which = el.dataset.which;
+  updateDraft((d) => ({ ...d, [which]: { ...d[which], grp: d[which].grp ^ bit } }));
+};
+A.saveSync = async () => {
+  const f = S.form;
+  const id = f.key.split(":")[0];
+  const fresh = await saveSection(id, "Sync settings", syncPatch(f.draft));
+  if (fresh && S.form === f) {
+    f.base = syncToDraft(fresh);
+    f.draft = deepClone(f.base);
+    render();
+  }
+};
+/* =============================================================================
+   OVERLAYS: <Dialog> / <AlertDialog>, the mobile output <Sheet>, <Toaster>,
+   and the reviewer-only Prototype controls panel.
+   ============================================================================= */
+
+function Dialog({ title, description = "", body = "", actions = "", size = "max-w-lg", close = true }) {
+  return `<div class="${DIALOG_OVERLAY}" data-a="overlayClick"></div>
+  <div role="dialog" aria-modal="true" aria-label="${esc(title.replace(/<[^>]+>/g, ""))}" class="${DIALOG_CONTENT.replace("max-w-lg", size)}">
+    <div class="${DIALOG_HEADER}"><h2 class="${DIALOG_TITLE}">${title}</h2>${when(description, `<p class="${DIALOG_DESCRIPTION}">${description}</p>`)}</div>
+    ${body}
+    ${when(actions, `<div class="${DIALOG_FOOTER}">${actions}</div>`)}
+    ${when(close, `<button type="button" class="${DIALOG_CLOSE}" data-a="closeModal" aria-label="Close">${icon("x")}</button>`)}
+  </div>`;
+}
+const cancelBtn = (label = "Cancel") => `<button type="button" class="${button({ variant: "outline" })}" data-a="closeModal">${label}</button>`;
+
+function Overlays() {
+  const m = S.modal;
+  if (!m) return "";
+  switch (m.type) {
+    case "leave":
+      return Dialog({
+        title: "Leave without saving?",
+        description: "Your changes in this section haven't been saved and will be lost.",
+        close: false,
+        size: "max-w-md",
+        actions: `${cancelBtn("Keep editing")}<button type="button" class="${button({ variant: "destructive" })}" data-a="leaveDiscard">Discard changes</button>`,
+      });
+
+    case "pin": {
+      const cooling = m.cooldownUntil > Date.now();
+      const secs = Math.ceil((m.cooldownUntil - Date.now()) / 1000);
+      const name = (S.cache.devices?.data ?? []).find((d) => d.id === m.deviceId)?.name ?? "This device";
+      const slot = (i) =>
+        cn(
+          "relative flex h-12 w-12 items-center justify-center rounded-md border border-input font-mono text-lg shadow-sm transition-all",
+          i === Math.min(m.pin.length, 3) && "group-focus-within:z-10 group-focus-within:ring-2 group-focus-within:ring-ring",
+          m.error && "border-danger",
+        );
+      return Dialog({
+        title: `<span class="mb-1 flex h-10 w-10 items-center justify-center rounded-full bg-muted">${icon("lock", "size-5")}</span>Enter the settings PIN`,
+        description: `${esc(name)} asks for its 4-digit PIN before settings can change.`,
+        size: "max-w-sm",
+        body: `<form class="flex flex-col items-center gap-3" data-submit="pinSubmit">
+          <!-- InputOTP: one real input laid over four display slots -->
+          <div class="group relative">
+            <input id="pin-input" class="absolute inset-0 h-full w-full cursor-text opacity-0 [caret-color:transparent]" inputmode="numeric" autocomplete="one-time-code" maxlength="4" pattern="[0-9]*" aria-label="PIN"
+              value="${esc(m.pin)}" data-in="pinInput"${m.busy || cooling ? " disabled" : ""}>
+            <div class="flex items-center gap-2" aria-hidden="true">${[0, 1, 2, 3].map((i) => `<div class="${slot(i)}">${m.pin[i] ? "•" : ""}</div>`).join("")}</div>
+          </div>
+          <p role="alert" class="min-h-5 text-center text-[13px] font-medium text-danger">${esc(m.error ?? "")}${cooling ? ` Try again in ${secs} s.` : ""}</p>
+          <p class="text-center text-[13px] text-muted-foreground">Unlocking applies to the whole device for 15 minutes, for anyone on your network.</p>
+          <div class="${DIALOG_FOOTER} w-full">${cancelBtn()}<button type="submit" class="${button()}"${m.pin.length !== 4 || m.busy || cooling ? " disabled" : ""}>${
+            m.busy ? spinner() : ""
+          }Unlock</button></div>
+        </form>`,
+      });
+    }
+
+    case "reboot":
+      return Dialog({
+        title: `Reboot ${esc(m.name)}?`,
+        description: "Lights will turn off for about 10 seconds while it restarts.",
+        close: false,
+        size: "max-w-md",
+        actions: `${cancelBtn()}<button type="button" class="${button()}" data-a="confirmReboot">Reboot</button>`,
+      });
+
+    case "remove":
+      return Dialog({
+        title: `Remove ${esc(m.name)} from Strand?`,
+        description:
+          "Nothing on the device changes. Its lights, settings and presets stay as they are, and other apps can still control it. You can add it back any time from Add device.",
+        close: false,
+        size: "max-w-md",
+        actions: `${cancelBtn()}<button type="button" class="${button({ variant: "destructive" })}" data-a="confirmRemove"${m.busy ? " disabled" : ""}>${m.busy ? spinner() : ""}Remove</button>`,
+      });
+
+    case "confirmLed":
+      return Dialog({
+        title: "Save LED hardware?",
+        description: "Saving re-creates the LED outputs. Segments may be adjusted to fit.",
+        close: false,
+        body: `<ul class="flex flex-col gap-1.5 rounded-md border bg-muted/40 p-3 text-sm tabular-nums">${m.lines
+          .map((l) => `<li class="flex gap-2"><span aria-hidden="true" class="text-muted-foreground">·</span><span>${esc(l)}</span></li>`)
+          .join("")}</ul>
+          <p class="text-[13px] text-muted-foreground">No reboot needed. The lights may blink once.</p>`,
+        actions: `${cancelBtn("Keep editing")}<button type="button" class="${button()}" data-a="confirmLedSave">Save outputs</button>`,
+      });
+
+    case "confirmReconnect":
+      return Dialog({
+        title: "Save and reconnect?",
+        description: `Changing Wi-Fi settings may disconnect this device. If the new settings are wrong, the device opens its own access point (${esc(m.apName)}) so you can fix it.`,
+        close: false,
+        size: "max-w-md",
+        body: when(m.alsoReboot, `<p class="text-[13px] text-muted-foreground">The new hostname or static IP takes effect after the next reboot.</p>`),
+        actions: `${cancelBtn()}<button type="button" class="${button()}" data-a="confirmReconnectSave">Save &amp; reconnect</button>`,
+      });
+
+    case "confirmRebootSave":
+      return Dialog({
+        title: "These changes apply after a reboot",
+        description: "Save now and reboot later, or reboot right away. Lights turn off for about 10 seconds while it restarts.",
+        close: false,
+        size: "max-w-md",
+        actions: `${cancelBtn()}<button type="button" class="${button({ variant: "secondary" })}" data-a="saveNoReboot">Save</button><button type="button" class="${button()}" data-a="saveAndReboot">Save &amp; reboot</button>`,
+      });
+
+    case "scan": {
+      const busy = !m.nets && !m.error;
+      return Dialog({
+        title: "Choose a network",
+        description: "Networks this device can hear right now.",
+        size: "max-w-md",
+        body: `<div class="flex items-center justify-between gap-2"><span class="text-[13px] text-muted-foreground" aria-live="polite">${
+          m.nets ? `${m.nets.length} networks` : busy ? "Scanning… this takes a few seconds." : ""
+        }</span><button type="button" class="${button({ variant: "ghost", size: "sm" })}" data-a="rescan"${busy ? " disabled" : ""}>${icon("rotate-cw", cn("size-4", busy && "animate-spin"))}Scan again</button></div>
+          ${when(m.error, `<p class="text-sm text-danger">${esc(m.error)}</p>`)}
+          <ul class="-mx-2 flex flex-col">${
+            m.nets
+              ? m.nets
+                  .map((n) => {
+                    const fiveG = n.channel > 14;
+                    return `<li><button type="button" class="flex min-h-12 w-full items-center gap-3 rounded-md px-2 py-2 text-left hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent" data-a="pickNet" data-ssid="${esc(
+                      n.ssid,
+                    )}"${fiveG ? " disabled" : ""}>
+                      ${SignalBars(n.rssi)}
+                      <span class="flex min-w-0 flex-1 flex-col"><span class="truncate font-medium">${esc(n.ssid)}</span>
+                        <span class="text-xs tabular-nums text-muted-foreground">${fiveG ? "5 GHz · not supported by this chip" : `Channel ${n.channel} · ${n.rssi} dBm`}</span></span>
+                      ${n.enc > 0 ? `<span aria-label="Secured">${icon("lock", "size-4 text-muted-foreground")}</span>` : `<span class="text-xs text-muted-foreground">Open</span>`}
+                    </button></li>`;
+                  })
+                  .join("")
+              : busy
+                ? [0, 1, 2, 3].map(() => `<li class="flex items-center gap-3 px-2 py-3">${skel("h-4 flex-1")}${skel("h-4 w-12")}</li>`).join("")
+                : ""
+          }</ul>
+          <p class="text-[13px] text-muted-foreground">Hidden network? Close this and type its name.</p>`,
+      });
+    }
+
+    case "output": {
+      const f = S.form;
+      if (!f || !f.ui.caps) return "";
+      const i = f.draft.outs.findIndex((o) => o.key === m.key);
+      if (i < 0) return "";
+      const errors = ledErrors(f.draft, f.ui.caps);
+      const totals = ledTotals(f.draft, f.ui.caps);
+      return `<div class="${DIALOG_OVERLAY}" data-a="overlayClick"></div>
+      <div role="dialog" aria-modal="true" aria-label="Output ${i + 1}" class="${SHEET_BOTTOM}">
+        <div class="${SHEET_HEADER}"><h2 class="text-base font-semibold">Output ${i + 1}</h2><p class="text-sm text-muted-foreground">Changes apply when you save the section.</p>
+          <button type="button" class="${DIALOG_CLOSE}" data-a="closeModal" aria-label="Close">${icon("x")}</button></div>
+        <div class="flex-1 overflow-y-auto p-4"><fieldset class="m-0 flex min-w-0 flex-col gap-5 border-0 p-0"${f.saving ? " disabled" : ""}>${OutputEditor(i, f, errors, totals, f.saving)}</fieldset></div>
+        <div class="${SHEET_FOOTER}"><button type="button" class="${button({ className: "flex-1" })}" data-a="closeModal">Done</button></div>
+      </div>`;
+    }
+
+    case "copy":
+      return Dialog({
+        title: "Copy this text",
+        description: "Your browser blocked copying. Select the text and copy it with your keyboard, or long-press on a phone.",
+        body: `<textarea readonly rows="${Math.min(12, m.text.split("\n").length + 1)}" aria-label="Text to copy" class="w-full rounded-md border bg-muted/40 p-3 font-mono text-xs">${esc(m.text)}</textarea>`,
+      });
+  }
+  return "";
+}
+
+// ---------------------------------------------------------------------------
+// <Toaster>
+// ---------------------------------------------------------------------------
+function Toasts() {
+  return `<div role="status" aria-live="polite" class="${TOASTER}">${S.toasts
+    .map(
+      (t) => `<div class="${TOAST}">${icon(
+        t.kind === "success" ? "circle-check" : t.kind === "error" ? "triangle-alert" : "info",
+        cn("mt-0.5 size-4", t.kind === "success" ? "text-success" : t.kind === "error" ? "text-danger" : "text-muted-foreground"),
+      )}<div class="min-w-0 flex-1"><p class="text-sm font-medium">${esc(t.title)}</p>${when(t.desc, `<p class="text-[13px] text-muted-foreground">${esc(t.desc)}</p>`)}</div></div>`,
+    )
+    .join("")}</div>`;
+}
+
+// ---------------------------------------------------------------------------
+// Prototype controls (reviewer-only; not part of the product)
+// ---------------------------------------------------------------------------
+const SIM_STATUS = { online: "Online", offline: "Powered off", rebooting: "Rebooting", reconnecting: "Reconnecting", "ap-mode": "Stuck in AP mode" };
+
+function PrototypePanel() {
+  const sims = prototype.sims();
+  const flags = prototype.flags();
+  const sw = (checked, action, data, label) => `<label class="flex flex-col items-start gap-1.5 text-muted-foreground">${label}${Switch({ checked, action, data, label })}</label>`;
+  return `<div class="fixed bottom-[calc(env(safe-area-inset-bottom,0px)+88px)] left-[max(16px,env(safe-area-inset-left,0px))] z-[75] flex flex-col items-start gap-2 md:bottom-[calc(env(safe-area-inset-bottom,0px)+16px)]">
+    ${when(
+      S.ui.proto,
+      () => `<div role="dialog" aria-label="Prototype controls" class="flex max-h-[min(72dvh,640px)] w-[min(22rem,calc(100vw-32px))] flex-col overflow-hidden rounded-lg border-2 border-dashed border-primary/60 bg-popover text-popover-foreground shadow-2xl">
+      <div class="flex items-center justify-between gap-2 border-b px-3 py-2">
+        <div class="flex flex-col"><span class="text-sm font-semibold">Prototype controls</span><span class="text-xs text-muted-foreground">For reviewers. Not part of the app.</span></div>
+        <button type="button" class="${button({ variant: "ghost", size: "icon-sm" })}" data-a="protoToggle" aria-label="Close prototype controls">${icon("x")}</button>
+      </div>
+      <div class="flex flex-col gap-4 overflow-y-auto p-3">
+        <section class="flex flex-col gap-2"><h3 class="text-xs font-medium uppercase tracking-wider text-muted-foreground">Devices on the network</h3>
+          ${sims
+            .map(
+              (s) => `<div class="rounded-md border p-2.5">
+              <div class="mb-2 flex flex-wrap items-center gap-2"><span class="text-sm font-medium">${esc(s.name)}</span>${when(!s.added, `<span class="${badge("outline")}">Not added</span>`)}<span class="ml-auto text-xs text-muted-foreground">${SIM_STATUS[s.status]}</span></div>
+              <div class="grid grid-cols-3 gap-2 text-xs">
+                ${sw(s.status !== "offline" && s.status !== "ap-mode", "protoOnline", `data-mac="${s.mac}"`, "Online")}
+                ${sw(s.pinLocked, "protoPin", `data-mac="${s.mac}"`, "PIN lock")}
+                ${sw(s.live, "protoLive", `data-mac="${s.mac}"`, "Live data")}
+              </div></div>`,
+            )
+            .join("")}
+          <p class="text-xs text-muted-foreground">Settings PINs are 1234.</p>
+        </section>
+        <div class="${SEPARATOR}"></div>
+        <section class="flex flex-col gap-3"><h3 class="text-xs font-medium uppercase tracking-wider text-muted-foreground">Scenarios</h3>
+          <div class="flex items-center justify-between gap-3 text-sm">Next Wi-Fi save fails to reconnect${Switch({ checked: flags.failNextWifi, action: "protoFlag", data: 'data-k="failNextWifi"', label: "Next Wi-Fi save fails to reconnect" })}</div>
+          <div class="flex items-center justify-between gap-3 text-sm">Discovery finds nothing${Switch({ checked: flags.discoveryEmpty, action: "protoFlag", data: 'data-k="discoveryEmpty"', label: "Discovery finds nothing" })}</div>
+        </section>
+        <div class="${SEPARATOR}"></div>
+        <div class="flex flex-wrap gap-2">
+          <button type="button" class="${button({ variant: "outline", size: "sm" })}" data-a="protoClear">${icon("trash-2")}Empty device list</button>
+          <button type="button" class="${button({ variant: "outline", size: "sm" })}" data-a="protoReset">${icon("rotate-ccw")}Reset demo</button>
+        </div>
+      </div></div>`,
+    )}
+    <button type="button" class="${button({ variant: "outline", size: "sm", className: "border-dashed border-primary/60 bg-popover shadow-lg" })}" data-a="protoToggle" aria-expanded="${S.ui.proto}">${icon(
+      "flask-conical",
+    )}<span class="hidden md:inline">Prototype</span><span class="sr-only md:hidden">Prototype controls</span></button>
+  </div>`;
+}
+
+A.closeModal = () => {
+  const m = S.modal;
+  if (!m) return;
+  if (m.type === "pin") m.reject({ cancelled: true });
+  S.modal = null;
+  render();
+};
+A.overlayClick = (el, e) => {
+  if (e.target === el) A.closeModal();
+};
+A.leaveDiscard = () => {
+  const to = S.modal.to;
+  S.modal = null;
+  navigate(to, { force: true });
+};
+A.confirmReboot = () => {
+  const { deviceId, name } = S.modal;
+  S.modal = null;
+  rebootDevice(deviceId, name);
+};
+A.confirmRemove = async () => {
+  const m = S.modal;
+  m.busy = true;
+  render();
+  try {
+    await api.removeDevice(m.deviceId);
+    S.modal = null;
+    navigate("/", { force: true });
+    toast("success", `Removed ${m.name} from Strand`);
+    invalidate((k) => k === "devices");
+  } catch (e) {
+    m.busy = false;
+    toast("error", `Couldn't remove ${m.name}`, e.message);
+  }
+};
+A.confirmLedSave = () => doSaveLed();
+A.confirmReconnectSave = () => doReconnect();
+A.saveNoReboot = () => doSaveNetwork(false);
+A.saveAndReboot = () => doSaveNetwork(true);
+
+A.pinInput = (el) => {
+  const m = S.modal;
+  m.pin = el.value.replace(/\D/g, "").slice(0, 4);
+  m.error = null;
+  render();
+  if (m.pin.length === 4) A.pinSubmit();
+};
+A.pinSubmit = async () => {
+  const m = S.modal;
+  if (!m || m.type !== "pin" || m.pin.length !== 4 || m.busy || m.cooldownUntil > Date.now()) return;
+  m.busy = true;
+  render();
+  try {
+    await api.unlock(m.deviceId, m.pin);
+    S.modal = null;
+    invalidate((k) => k === "devices");
+    m.resolve();
+  } catch (e) {
+    m.busy = false;
+    m.pin = "";
+    if (e.code === "wrong_pin") {
+      m.error = "That PIN didn't work.";
+      m.cooldownUntil = Date.now() + 3000; // retries allowed after 3 s
+      setTimeout(() => {
+        if (S.modal === m) S.focus = "pin-input";
+        render();
+      }, 3050);
+    } else m.error = e.message;
+    render();
+  }
+};
+
+const flip = (el) => el.getAttribute("aria-checked") !== "true";
+A.protoToggle = () => {
+  S.ui.proto = !S.ui.proto;
+  render();
+};
+A.protoOnline = (el) => prototype.setOnline(el.dataset.mac, flip(el));
+A.protoPin = (el) => prototype.setPinLocked(el.dataset.mac, flip(el));
+A.protoLive = (el) => prototype.setLive(el.dataset.mac, flip(el));
+A.protoFlag = (el) => prototype.setFlag(el.dataset.k, flip(el));
+A.protoClear = () => {
+  prototype.clearDevices();
+  navigate("/", { force: true });
+};
+A.protoReset = () => {
+  prototype.reset();
+  S.cache = {};
+  S.form = null;
+  S.reconnect = null;
+  S.reboot = {};
+  navigate("/", { force: true });
+};
+/* =============================================================================
+   BOOT
+   ============================================================================= */
+applyTheme();
+prototype.subscribe(() => invalidate(isLiveKey)); // the "server" pushed a change
+setInterval(() => invalidate((k) => k === "devices"), 15000); // device list refresh
+matchMedia("(min-width: 900px)").addEventListener("change", (e) => {
+  S.desktop = e.matches;
+  render();
+});
+matchMedia("(prefers-color-scheme: light)").addEventListener("change", render);
+// Live clocks: System uptime, reconnect timer, PIN cooldown, prototype panel status.
+setInterval(() => {
+  const r = route();
+  if ((r.name === "device" && r.section === "system") || S.reconnect?.phase === "reconnecting" || S.modal?.type === "pin" || S.ui.proto) render();
+}, 1000);
+setInterval(render, 5000); // lets time-based refreshes (info every 5–10 s) kick in
+render();
+</script>
