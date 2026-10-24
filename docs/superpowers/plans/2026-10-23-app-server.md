@@ -195,9 +195,9 @@ review: yes. This task removes a large amount of template code. A leftover SSR, 
 - Copy from `~/Code/app-template/frontend`, then edit: `package.json`, `tsconfig.json`, `vite.config.ts`, `vitest.config.ts`, `eslint.config.js`, `components.json`, `index.html`, `.gitignore`, `.storybook/`, `src/**`, `server/server.ts`, `server/config.ts`, `server/requestLogSerializer.ts`
 - Copy from `~/Code/app-template`: `pnpm-workspace.yaml` (keep `autoInstallPeers: false` and the build settings; no `packages:` list), the `packageManager` field of the root `package.json`
 - Copy into `src/`: `packages/core/src/store/createApiThunk.ts`, `packages/core/src/lib/withActions.ts`, `packages/core/src/lib/reactCompat.ts`, and the tests of these three files
-- Create: `server/app.ts`, `server/requestGuard.ts`, `src/store/index.ts`, `src/store/slices/devices.ts`, `CONVENTIONS.md`
+- Create: `server/app.ts`, `server/requestGuard.ts`, `src/store/index.ts`, `CONVENTIONS.md`
 - Modify: `.gitignore`, `CLAUDE.md`
-- Test: `server/app.test.ts`, `server/config.test.ts`, `server/requestGuard.test.ts`, `src/store/slices/devices.test.ts`
+- Test: `server/app.test.ts`, `server/config.test.ts`, `server/requestGuard.test.ts`, `src/store/index.test.ts`
 
 **Interfaces:**
 - Produces:
@@ -205,7 +205,8 @@ review: yes. This task removes a large amount of template code. A leftover SSR, 
   - `AppDeps` and `buildApp(deps: AppDeps): FastifyInstance`, as above. Task 1 registers the request guard, the request log serializer, `bodyLimit: 32768`, static files, the SPA fallback, `Cache-Control: no-store` on `/api/*`, and the `/api` 404. Later tasks add route plugins in `server/routes/*.ts`, each `export async function <name>Routes(app: FastifyInstance, deps: AppDeps): Promise<void>`, registered in `buildApp`.
   - `registerRequestGuard(app: FastifyInstance, config: Config): void`.
   - Package scripts: `build` (client to `dist/`), `build:server` (server to `dist-server/`), `start` (`node dist-server/server.js`), `dev:build`, `dev`, `test`, `lint`, `typecheck`, `storybook`.
-  - `src/store`: `makeStore()`, `RootState`, `AppDispatch`, and `src/store/slices/devices.ts` with `devicesSlice` (`{ list: Device[]; status: "idle" | "loading" | "ok" | "error" }`). Task 11 adds the `fetchDevices` thunk.
+  - `src/store/index.ts`: `makeStore(reducers: ReducersMapObject)`, `RootState`, `AppDispatch`. Task 1 calls it with a placeholder `app` reducer that holds `{}`. Task 11 replaces the placeholder with `devicesSlice`.
+  - `src/store/createApiThunk.ts` (`createApiThunk`), `src/lib/withActions.ts` (`withActions`), `src/lib/reactCompat.ts`, copied from the template core.
 
 - [ ] **Step 1: Copy and strip.** Copy the files above. Then remove each item in spec §5 "Remove":
   - SSR: `src/entryServer.tsx`, `src/routeData.ts`, `src/routeRules.ts`, the `entryServer` build input, `ssrEntryPath`, `server/html.ts`.
@@ -233,8 +234,8 @@ review: yes. This task removes a large amount of template code. A leftover SSR, 
     - `Host: evil.example.com` → 403 `{ error: "invalid_request" }`. With `allowedHosts: ["evil.example.com"]` → 200. With `"*"` → 200.
     - `POST` with `Host: localhost`, no `X-Strand-Request` → 403. With `X-Strand-Request: 1` → 200. With that header and `Origin: http://evil.example.com` → 403. With `Origin: http://localhost:3000` → 200.
     - `GET /` (not `/api`) with `Host: evil.example.com` → 200 (the guard covers `/api` only).
-  - `src/store/slices/devices.test.ts`: the initial state is `{ list: [], status: "idle" }`.
-- [ ] **Step 8: Implement** `buildApp`, `registerRequestGuard`, `server/server.ts`, the store and the slice until the tests pass. The app tests pass `new DatabaseSync(":memory:")` as `db` and mDNS stubs that return `[]` and `null`. `server.ts` listens on `0.0.0.0:config.port`. Task 3 replaces the database it opens with `openDb`. Remove Fastify's `text/plain` content-type parser so that `/api` accepts only `application/json` bodies.
+  - `src/store/index.test.ts`: `makeStore({ app: (s = {}) => s }).getState()` is `{ app: {} }`.
+- [ ] **Step 8: Implement** `buildApp`, `registerRequestGuard`, `server/server.ts` and the store until the tests pass. The app tests pass `new DatabaseSync(":memory:")` as `db` and mDNS stubs that return `[]` and `null`. `server.ts` listens on `0.0.0.0:config.port`, and also passes those mDNS stubs, `now: () => new Date()`, `wledPort: 80` and `scanDelayMs: 1000`. Task 3 replaces the database it opens with `openDb`. Task 5 replaces the mDNS stubs. Remove Fastify's `text/plain` content-type parser so that `/api` accepts only `application/json` bodies.
 - [ ] **Step 9: Write `CONVENTIONS.md`.** Merge the template's root `CONVENTIONS.md` §4 (naming), §5 (commits), §6 (tests, type gate, one source of truth) and §8 (formatting), and the parts of `frontend/CONVENTIONS.md` that still apply: the no-`NODE_ENV` rule, the hooks rule, Storybook-first, shadcn primitives, the dev loop. Rewrite the dev-loop commands for this package. Do not keep the sections on SSR, cookies, access policy, the three SEO registries, path identities, the asset CDN, or analytics. Add these sections:
   - "API client": `src/api/client.ts` is hand-written and replaces the generated client. Thunks call it through `createApiThunk`. `shared/apiTypes.ts` is the one source of the API types.
   - "Server": routes are Fastify plugins in `server/routes/`. Each one throws `ApiError` for an expected failure. Requests to devices go through `server/wled/deviceClient.ts` only.
@@ -314,21 +315,23 @@ review: yes (schema and migrations)
 review: yes (error mapping and address recovery are the base of every route)
 
 **Files:**
-- Create: `test/fakeWled.ts`, `test/fixtures/seeds.ts`, `test/testApp.ts`, `server/wled/deviceClient.ts`
+- Create: `test/fakeWled.ts`, `test/fixtures/seeds.ts`, `test/testApp.ts`, `server/wled/deviceClient.ts`, `test/fixtures/sjsV015.txt`, `test/fixtures/sjsV17.txt`, `test/fixtures/sjsEthernet.txt`, `test/fixtures/sjsUnsupported.txt`
 - Test: `server/wled/deviceClient.test.ts`
 
 **Interfaces:**
-- Consumes: `AppDeps`, `buildApp` (Task 1); `ApiError`, `messages`, `WledInfo` (Task 2); `openDb`, `devices` (Task 3).
-- Produces, `test/fixtures/seeds.ts`: `seeds`, the five seeds of the design (`SEEDS`, lines 375-556), as WLED-shaped data per seed: `info` (the output of the mock's `info()`, plus `brand: "WLED"`), `cfg` (the seed `config`, plus `hw.btn`, `hw.ir`, `hw.relay`, `if.mqtt`, `if.ntp` stubs so that subtree tests can see them), `state`, `presets` (a `presets.json` object), `effects`, `fxdata`, `palettes`, `pins` (from the mock's `pinsFor`).
+- Consumes: `AppDeps`, `Config`, `buildApp` (Task 1); `ApiError`, `messages`, `WledInfo` (Task 2); `openDb`, `devices`, `DeviceRow` (Task 3).
+- Produces, `test/fixtures/sjs*.txt`: the `s.js?p=2` samples. Build each one from the format in "Verified external API": `function GetV(){var d=document;d.um_p=[-1];d.rsvd=[6,7,8,9,10,11];d.ro_gpio=[34,35,36,37,38,39];d.max_gpio=40;...d.ledTypes=[{i:22,c:1,t:"D",n:"WS281x"},{i:30,c:3,t:"D",n:"SK6812/WS2814 RGBW"},{i:45,c:7,t:"AAAAA",n:"PWM RGBCCT"}];bLimits(...);...}`. Use 8 arguments in `sjsV015.txt` (`32,3,2048,87040,16384,10,16,16`) and 10 in `sjsV17.txt` (`0,2048,87040,16384,10,16,8,8,16,4`). `sjsEthernet.txt` has `d.rsvd=[6,7,8,];`. `sjsUnsupported.txt` has 9 `bLimits` arguments. The fake serves `s.js?p=3` as `function GetV(){var d=document;}`.
+- Produces, `test/fixtures/seeds.ts`: `seeds`, the five seeds of the design (`SEEDS`, lines 375-556), as WLED-shaped data per seed: `info` (the output of the mock's `info()`, plus `brand: "WLED"`), `cfg` (the seed `config`, plus `hw.btn`, `hw.ir`, `hw.relay`, `if.mqtt`, `if.ntp` stubs so that subtree tests can see them), `state`, `presets` (a `presets.json` object), `effects`, `fxdata`, `palettes`, `pins` (from the mock's `pinsFor`), `networks` (the design's `AIRWAVES`, line 362).
 - Produces, `test/fakeWled.ts`: `startFakeWled(seed, opts?: FakeOpts): Promise<FakeWled>`:
   - `FakeOpts = { pin?: string; version?: "0.15" | "17"; nodes?: { ip: string }[]; sjs?: string; scanEmptyCalls?: number; infoOverride?: object }`. Defaults: version `"17"`, no PIN, no nodes, the `sjsV17.txt` or `sjsV015.txt` fixture for the version, `scanEmptyCalls` 2.
-  - `FakeWled = { port: number; requests: { method: string; path: string; body: unknown }[]; setMode(m: "ok" | "timeout" | "busy" | "reset" | "deviceError" | "notJson" | "serverError"): void; restart(): void; cfg: Record<string, unknown>; state: Record<string, unknown>; close(): Promise<void> }`.
+  - `FakeWled = { port: number; requests: { method: string; path: string; body: unknown }[]; setMode(m: FakeMode): void; failNext(m: FakeMode, match: { method?: string; path?: string; skip?: number }): void; restart(): void; cfg: Record<string, unknown>; state: Record<string, unknown>; close(): Promise<void> }`.
+  - `FakeMode = "ok" | "timeout" | "busy" | "reset" | "deviceError" | "notJson" | "serverError" | "huge"`. `setMode` applies to every later request. `failNext` applies the mode to one later request that matches `method` and `path`, after `skip` matching requests (default 0). Then the fake goes back to its current mode.
   - It listens on `127.0.0.1` with `forceCloseConnections: true`, and `close()` destroys any open socket. It serves every WLED endpoint in "Verified external API" from the seed. With `version: "0.15"`, `/json/pins` returns the full `/json` reply with no `pins` key.
   - It applies `POST /json/cfg` with the firmware rules: top-level keys replace, `nw.ins` never shrinks, an empty client `psk` is ignored, `ap.psk` is copied.
   - It implements the PIN: `401` on `POST /json/cfg` and on `s.js?p>0` while locked. A body `"pin"` that matches unlocks it.
   - `restart()` sets `info.uptime` to 0 and keeps counting from there.
-  - Modes: `"timeout"` never answers; `"busy"` returns `503`; `"reset"` destroys the socket; `"deviceError"` returns `200 {"error":3}`; `"notJson"` returns `200 <html>`; `"serverError"` returns `500`.
-- Produces, `test/testApp.ts`: `makeTestApp(opts?: { browse?: AppDeps["mdns"]["browseWled"]; resolveA?: AppDeps["mdns"]["resolveA"]; now?: () => Date; wledPort?: number; allowedHosts?: string[] | "*" }): { app: FastifyInstance; db: DatabaseSync; addFake(f: FakeWled, seed, host?: string): DeviceRow; inject(opts): Promise<LightMyRequestResponse> }`. Config: `deviceTimeoutMs: 300`, `discoveryWindowMs: 50`, `scanDelayMs: 1`. `inject` adds `Host: localhost`, `X-Strand-Request: 1` and `Content-Type: application/json` when there is a body.
+  - Modes: `"timeout"` never answers; `"busy"` returns `503`; `"reset"` destroys the socket; `"deviceError"` returns `200 {"error":3}`; `"notJson"` returns `200 <html>`; `"serverError"` returns `500`; `"huge"` streams 2 MB with status `200`.
+- Produces, `test/testApp.ts`: `makeTestApp(opts?: { browse?: AppDeps["mdns"]["browseWled"]; resolveA?: AppDeps["mdns"]["resolveA"]; now?: () => Date; wledPort?: number; allowedHosts?: string[] | "*" }): { app: FastifyInstance; deps: AppDeps; db: DatabaseSync; addFake(f: FakeWled, seed, host?: string): DeviceRow; inject(opts): Promise<LightMyRequestResponse> }`. Config: `deviceTimeoutMs: 300`, `discoveryWindowMs: 50`, `scanDelayMs: 1`. `inject` adds `Host: localhost`, `X-Strand-Request: 1` and `Content-Type: application/json` when there is a body.
 - Produces, `server/wled/deviceClient.ts`:
   - `type DeviceTarget = { id?: string; name: string; host: string; port: number; lastIp: string; mac?: string }`.
   - `deviceRequest<T>(deps: AppDeps, target: DeviceTarget, path: string, init?: { method?: "GET" | "POST"; body?: unknown; timeoutMs?: number; parse?: "json" | "text"; recover?: boolean }): Promise<T>`. `recover` defaults to `true`.
@@ -343,14 +346,14 @@ review: yes (error mapping and address recovery are the base of every route)
   - `"deviceError"`: throws 502 `device_error`, and the message contains `3`.
   - `"notJson"` and `"serverError"`: throw 502 `device_error`.
   - A `401` (locked fake, `GET /settings/s.js?p=3`): throws 401 `pin_required`.
-  - A reply over 1 MB (a fake route that streams 2 MB): throws 502 `device_error`.
+  - `"huge"` (2 MB): throws 502 `device_error`.
   - The URL is built with `new URL()`: a `path` that is not one of the fixed device paths is a programming error, so `deviceRequest` asserts that `path` starts with `/`.
   - Review Focus 1: the row has `lastIp: "192.0.2.1"` (unreachable), `host: "wled-backyard.local"`, and the fake's port. `resolveA` returns `127.0.0.1`, and the fake's MAC matches. The request succeeds, and `devices.get(id).lastIp` becomes `127.0.0.1`.
   - The same case, but the fake's MAC is different: throws 504, and `lastIp` does not change.
   - The same case with `recover: false`: throws 504, and `resolveA` is not called.
   - `fetchInfo` on a fake with `infoOverride: { brand: "Other" }`, and with `infoOverride: { mac: "ZZ" }` → `null`.
 - [ ] **Step 2: Run** `pnpm test server/wled/deviceClient.test.ts`. Expected: FAIL.
-- [ ] **Step 3: Implement** the fake, the seeds, `makeTestApp` and the client by spec §9. Map errors: a `TimeoutError`, or `err.cause.code` in `ECONNREFUSED`, `EHOSTUNREACH`, `ENETUNREACH`, `ENOTFOUND`, `EAI_AGAIN`, `EADDRNOTAVAIL`, `UND_ERR_CONNECT_TIMEOUT` → offline. `ECONNRESET`, `UND_ERR_SOCKET`, or status `503` → busy. Any other fetch failure → offline. Address recovery runs only for an offline error, only when `recover` is true, `host` ends in `.local`, and the target has an `id` and a `mac`, and only one time. Read the body as a stream and stop after 1 MB.
+- [ ] **Step 3: Implement** the fixtures, the fake, the seeds, `makeTestApp` and the client by spec §9. The client uses the global `fetch`, so tests can spy on it. Map errors: a `TimeoutError`, or `err.cause.code` in `ECONNREFUSED`, `EHOSTUNREACH`, `ENETUNREACH`, `ENOTFOUND`, `EAI_AGAIN`, `EADDRNOTAVAIL`, `UND_ERR_CONNECT_TIMEOUT` → offline. `ECONNRESET`, `UND_ERR_SOCKET`, or status `503` → busy. Any other fetch failure → offline. Address recovery runs only for an offline error, only when `recover` is true, `host` ends in `.local`, and the target has an `id` and a `mac`, and only one time. Read the body as a stream and stop after 1 MB.
 - [ ] **Step 4: Gate.** `pnpm exec tsc --noEmit && pnpm lint && pnpm test server/wled`. Expected: PASS.
 - [ ] **Step 5: Commit.** `feat(server): add WLED device client and fake device for tests`
 
@@ -382,7 +385,7 @@ review: yes (public API, input handling)
 - Test: `server/routes/devices.test.ts`
 
 **Interfaces:**
-- Consumes: `deviceRequest`, `fetchInfo`, `makeTestApp`, `startFakeWled`, `seeds` (Task 4); `devices` (Task 3); `ApiError`, `messages`, `Device`, `DiscoveredDevice` (Task 2); `AppDeps` (Task 1).
+- Consumes: `deviceRequest`, `fetchInfo`, `DeviceTarget`, `makeTestApp`, `startFakeWled`, `seeds` (Task 4); `devices`, `DeviceRow` (Task 3); `ApiError`, `messages`, `Device`, `DiscoveredDevice` (Task 2); `AppDeps` (Task 1).
 - Produces: `devicesRoutes(app, deps)`. It also exports:
   - `normalizeHost(input: string, defaultPort: number): { host: string; port: number } | null`.
   - `toDevice(row: DeviceRow, live: { online: boolean; locked: boolean }, now: Date): Device`.
@@ -425,19 +428,19 @@ review: no
 - Test: `server/routes/discovery.test.ts`
 
 **Interfaces:**
-- Consumes: `AppDeps.mdns.browseWled`, `AppDeps.wledPort` (Task 1); `deviceRequest`, `fetchInfo`, `isPrivateIpv4`, `makeTestApp`, `startFakeWled` (Task 4); `devices` (Task 3); `DiscoveredDevice` (Task 2).
+- Consumes: `AppDeps.mdns.browseWled`, `AppDeps.wledPort` (Task 1); `deviceRequest`, `fetchInfo`, `isPrivateIpv4`, `makeTestApp`, `startFakeWled`, `seeds` (Task 4); `devices` (Task 3); `DiscoveredDevice` (Task 2); `targetOf` (Task 6).
 - Produces: `discoveryRoutes(app, deps)`.
 
 - [ ] **Step 1: Write the failing tests.**
   - `browse` returns Garage and Backyard (two fakes). Backyard is saved. The result has both, and only Backyard has `alreadyAdded: true`. `host` is `"wled-garage.local"` for Garage.
   - `browse` returns `[]`. A saved fake has `nodes: [{ ip: "127.0.0.1" }]`, and `wledPort` is the port of a second fake. The result has the second fake.
   - `browse` returns an address that does not answer, an address that is not WLED, and a public address (`8.8.8.8`). The result leaves out all three, and the server sends no request to `8.8.8.8`.
-  - `browse` returns 100 addresses. The server sends at most 64 `/json/info` requests.
+  - `browse` returns 100 addresses. The server sends at most 64 `/json/info` requests. This test and the `8.8.8.8` test spy on `globalThis.fetch` to count the requests.
   - The same MAC found through mDNS and through nodes appears once.
   - A saved device found at a new address gets its `last_ip` updated.
   - A device whose `id.mdns` is `""`: `host` is its IP.
 - [ ] **Step 2: Run.** Expected: FAIL.
-- [ ] **Step 3: Implement** by spec §8.2.2. Run `browseWled` and the `/json/nodes` requests at the same time. Keep only private IPv4 addresses (`isPrivateIpv4`), remove duplicates, and keep at most 64. Then run every `fetchInfo` at the same time. The `/json/info` reply has no mDNS name. Take it from the browse result (`service.host`). For an address that came from nodes, send `GET /json/cfg` and read `id.mdns`.
+- [ ] **Step 3: Implement** by spec §8.2.2. Run `browseWled` and the `/json/nodes` requests at the same time. Keep only private IPv4 addresses (`isPrivateIpv4`). Remove duplicate candidates by `ip:port` (the tests run all fakes on `127.0.0.1` with different ports), and keep at most 64. After the info requests, remove duplicate devices by MAC. Then run every `fetchInfo` at the same time. The `/json/info` reply has no mDNS name. Take it from the browse result (`service.host`). For an address that came from nodes, send `GET /json/cfg` and read `id.mdns`.
 - [ ] **Step 4: Gate.** `pnpm exec tsc --noEmit && pnpm lint && pnpm test server/routes/discovery.test.ts`. Expected: PASS.
 - [ ] **Step 5: Commit.** `feat(server): add WLED discovery endpoint`
 
@@ -446,12 +449,12 @@ review: no
 review: yes (the parser reads text from the device)
 
 **Files:**
-- Create: `server/wled/capabilities.ts`, `server/routes/settings.ts`, `test/fixtures/sjsV015.txt`, `test/fixtures/sjsV17.txt`, `test/fixtures/sjsEthernet.txt`, `test/fixtures/sjsUnsupported.txt`
+- Create: `server/wled/capabilities.ts`, `server/routes/settings.ts`
 - Modify: `server/app.ts` (register `settingsRoutes`)
 - Test: `server/wled/capabilities.test.ts`, `server/routes/settings.test.ts`
 
 **Interfaces:**
-- Consumes: `deviceRequest`, `makeTestApp`, `startFakeWled`, `seeds` (Task 4); `targetOf`, `lockCheck` (Task 6); `devices` (Task 3); `ApiError`, `messages`, `Capabilities`, `PinInfo`, `WledInfo`, `WledConfig`, `Preset`, `WifiNetwork` (Task 2).
+- Consumes: `deviceRequest`, `makeTestApp`, `startFakeWled`, `seeds`, the `sjs*.txt` fixtures (Task 4); `targetOf`, `lockCheck` (Task 6); `devices`, `DeviceRow` (Task 3); `ApiError`, `messages`, `Capabilities`, `PinInfo`, `WledInfo`, `WledConfig`, `WledConfigFull`, `Preset`, `WifiNetwork` (Task 2).
 - Produces:
   - `parseCapabilities(text: string): (Capabilities & { maxGpio: number }) | null`.
   - `pinsFromCapabilities(caps: Capabilities & { maxGpio: number }, cfg: WledConfigFull): PinInfo[]`. GPIOs `0` to `maxGpio - 1`, without `reservedPins`. `c` has 0x20 for `inputOnlyPins`. `a: true, n: "LEDs"` for each pin in `hw.led.ins[].pin`, and `n: "Button"`, `"IR"`, `"Relay"` for `hw.btn.ins[].pin`, `hw.ir.pin`, `hw.relay.pin` when they are 0 or more.
@@ -459,8 +462,7 @@ review: yes (the parser reads text from the device)
   - `loadDevice(deps: AppDeps, id: string): DeviceRow`. It throws `404 not_found`.
   - `readInfo(deps: AppDeps, row: DeviceRow): Promise<WledInfo>`. It sends `GET /json/info` and calls `devices.recordSeen` (spec §7).
 
-- [ ] **Step 1: Write the fixtures.** Build each `s.js` sample from the format in "Verified external API": `function GetV(){var d=document;d.um_p=[-1];d.rsvd=[6,7,8,9,10,11];d.ro_gpio=[34,35,36,37,38,39];d.max_gpio=40;...d.ledTypes=[{i:22,c:1,t:"D",n:"WS281x"},{i:30,c:3,t:"D",n:"SK6812/WS2814 RGBW"},{i:45,c:7,t:"AAAAA",n:"PWM RGBCCT"}];bLimits(...);...}`. Use 8 arguments in `sjsV015.txt` (`32,3,2048,87040,16384,10,16,16`) and 10 in `sjsV17.txt` (`0,2048,87040,16384,10,16,8,8,16,4`). `sjsEthernet.txt` has `d.rsvd=[6,7,8,];`. `sjsUnsupported.txt` has 9 `bLimits` arguments.
-- [ ] **Step 2: Write the failing tests.**
+- [ ] **Step 1: Write the failing tests.** They use the `sjs*.txt` fixtures from Task 4.
   - `parseCapabilities` on `sjsV015.txt` → `limits` `{ maxLedsPerOutput: 2048, ledMemoryBytes: 87040, maxLeds: 16384, maxDigitalOutputs: 16, maxPwmPins: 16 }`, `reservedPins` `[6,…,11]`, `inputOnlyPins` `[34,…,39]`, `maxGpio: 40`, three `ledTypes` with `i`, `c`, `t`, `n`.
   - `sjsV17.txt` → the same `limits`.
   - `sjsEthernet.txt` → `reservedPins` `[6,7,8]`.
@@ -471,12 +473,12 @@ review: yes (the parser reads text from the device)
   - `GET config` returns only the keys `id, nw, ap, def, light, hw, if`, with `hw` = `{ led }` and `if` = `{ sync }`.
   - `GET info` returns `WledInfo` and updates `last_seen`.
   - `GET presets` from `{"0":{},"1":{"n":"Warm White"},"3":{},"2":{"n":"Christmas"}}` → `[{id:1,name:"Warm White"},{id:2,name:"Christmas"}]`.
-  - `POST networks/scan`: the fake returns `[]` two times, then the design's `AIRWAVES` → the five networks. With `scanEmptyCalls: 99` → `{ networks: [] }` after 10 requests.
+  - `POST networks/scan`: the fake returns `[]` two times, then the seed's `networks` → the five networks. With `scanEmptyCalls: 99` → `{ networks: [] }` after 10 requests.
   - Each endpoint for an unknown `:id` → `404 not_found`. For an offline device → `504 device_offline`.
-- [ ] **Step 3: Run.** Expected: FAIL.
-- [ ] **Step 4: Implement** by spec §8.3 and "Verified external API". The parser does not run the text. The scan waits `deps.scanDelayMs` between requests.
-- [ ] **Step 5: Gate.** `pnpm exec tsc --noEmit && pnpm lint && pnpm test server/wled/capabilities.test.ts server/routes/settings.test.ts`. Expected: PASS.
-- [ ] **Step 6: Commit.** `feat(server): add settings read endpoints and capabilities parser`
+- [ ] **Step 2: Run.** Expected: FAIL.
+- [ ] **Step 3: Implement** by spec §8.3 and "Verified external API". The parser does not run the text. The scan waits `deps.scanDelayMs` between requests.
+- [ ] **Step 4: Gate.** `pnpm exec tsc --noEmit && pnpm lint && pnpm test server/wled/capabilities.test.ts server/routes/settings.test.ts`. Expected: PASS.
+- [ ] **Step 5: Commit.** `feat(server): add settings read endpoints and capabilities parser`
 
 ### Task 9: Config write, pending reboot, reboot, unlock
 
@@ -505,13 +507,13 @@ review: yes (writes device configuration; data integrity)
   - `classifyChanges`: a new SSID → `reconnect`. A `psk` on an entry → `reconnect`. `ap.chan` changed → `reconnect`. `id.mdns` changed → `reboot: ["hostname"]`. A static IP added → `reboot: ["static IP"]`. `def.bri` changed → neither.
 - [ ] **Step 2: Write the failing route tests** against the fake. Use `makeTestApp({ now })` with a clock the test moves.
   - `PATCH config { hw: { led: { maxpwr: 850 } } }` → exactly one `POST /json/cfg` in `fake.requests`, whose body has the full `hw` object and no other key. The response is the re-read config, with `maxpwr: 850`.
-  - `PATCH config` with a new SSID → the requests are `POST /json/cfg`, `GET /json/cfg`, `POST /json/state {"rb":true}`, in that order. `pending_reboot` is empty afterward.
-  - The same, but the fake is set to `"timeout"` after the re-read → 200 with the config, and `GET pending-reboot` includes `"Wi-Fi"` (Plan decision 7).
+  - `PATCH config` with a new SSID → `fake.requests` is exactly `GET /json/cfg`, `POST /json/cfg`, `GET /json/cfg`, `POST /json/state {"rb":true}`. `pending_reboot` is empty afterward.
+  - The same, with `fake.failNext("timeout", { method: "POST", path: "/json/state" })` → 200 with the config, and `GET pending-reboot` includes `"Wi-Fi"` (Plan decision 7).
   - `PATCH config { id: { mdns: "porch" } }` → no reboot request. `GET pending-reboot` → `["hostname"]`. Move the clock forward 10 s, call `fake.restart()`, and `GET pending-reboot` → `[]`, and the DB value is cleared.
   - `GET pending-reboot` with nothing pending → `[]`, and the fake gets no request.
   - `GET pending-reboot` while the device is offline → the stored list.
   - Review Focus 5: a locked fake → `401 pin_required`, no `rb` request, and `pending_reboot` does not change. The same for a fake in `"timeout"` → `504`.
-  - The write succeeds but the re-read times out → `504 device_offline`, and no `rb` request.
+  - The write succeeds but the re-read times out (`fake.failNext("timeout", { method: "GET", path: "/json/cfg", skip: 1 })`) → `504 device_offline`, and no `rb` request.
   - A shorter `nw.ins` → `422 unsupported_change`, and the fake gets no `POST`.
   - A body `{ ota: { lock: false } }`, `[]`, or `{ hw: 5 }` → `400 invalid_request`, and the fake gets no `POST`.
   - `POST unlock { pin: "1234" }` on a locked fake → 204, then `PATCH config` succeeds. `{ pin: "0000" }` → `401 wrong_pin`. On a fake with no PIN → 204. `{}`, `{ pin: "12" }`, `{ pin: 1234 }` → `400 invalid_request`.
@@ -536,7 +538,7 @@ review: no
 - Test: `server/routes/control.test.ts`, `server/routes/preferences.test.ts`
 
 **Interfaces:**
-- Consumes: `loadDevice` (Task 8); `targetOf` (Task 6); `deviceRequest`, `makeTestApp`, `startFakeWled` (Task 4); `preferences` (Task 3); `ApiError`, `Effect`, `Palette` (Task 2).
+- Consumes: `loadDevice` (Task 8); `targetOf` (Task 6); `deviceRequest`, `makeTestApp`, `startFakeWled`, `seeds` (Task 4); `preferences` (Task 3); `ApiError`, `messages`, `Effect`, `Palette` (Task 2).
 - Produces: `controlRoutes(app, deps)` (`GET state`, `PATCH state`, `GET effects`, `GET palettes`); `preferencesRoutes(app, deps)` (`GET /api/preferences`, `PUT /api/preferences/:key`).
 
 - [ ] **Step 1: Write the failing tests.**
@@ -555,16 +557,16 @@ review: no
 review: no
 
 **Files:**
-- Create: `src/api/client.ts`
-- Modify: `src/store/createApiThunk.ts` (read the `{ error, message }` body and use the client's `ApiError`), `src/store/slices/devices.ts` (add `fetchDevices`)
+- Create: `src/api/client.ts`, `src/store/slices/devices.ts`
+- Modify: `src/store/createApiThunk.ts` (read the `{ error, message }` body and use the client's `ApiError`), `src/entryClient.tsx` and `src/store/index.ts` (replace the placeholder `app` reducer with `devices`)
 - Test: `src/api/client.test.ts`, `src/store/createApiThunk.test.ts`, `src/store/slices/devices.test.ts`
 
 **Interfaces:**
-- Consumes: `shared/apiTypes.ts` (Task 2); `createApiThunk`, `devicesSlice` (Task 1).
+- Consumes: `shared/apiTypes.ts` (Task 2); `createApiThunk`, `makeStore` (Task 1).
 - Produces:
   - `export const api` with the functions of the design's mock `api` object, with the same names: `listDevices`, `discover`, `probeHost`, `addDevice`, `removeDevice`, `getInfo`, `getState`, `patchState`, `getConfig`, `patchConfig`, `unlock`, `getCapabilities`, `getPins`, `scanNetworks`, `getPresets`, `reboot`. Also `getPendingReboot`, `getEffects`, `getPalettes`, `getPreferences`, `putPreference`.
   - `export class ApiError extends Error { status: number; code: ErrorCode }`. It is the only `ApiError` in `src/`.
-  - `fetchDevices` thunk (through `createApiThunk`) that fills `devicesSlice.list`.
+  - `devicesSlice` (`{ list: Device[]; status: "idle" | "loading" | "ok" | "error" }`) and the `fetchDevices` thunk (through `createApiThunk`) that fills `list`.
 
 - [ ] **Step 1: Write the failing tests** with a stubbed `fetch`:
   - A table with one row per function: the method, the path (for example `getConfig("a/b")` → `GET /api/devices/a%2Fb/config`), and the body.
@@ -574,7 +576,7 @@ review: no
   - A `204` reply resolves to `undefined`.
   - URLs are absolute paths with no origin.
   - `createApiThunk` turns an `ApiError` into a rejected action whose payload is `{ status, code, message }`.
-  - `fetchDevices` fulfilled → `status: "ok"` and the list.
+  - The initial `devices` state is `{ list: [], status: "idle" }`. `fetchDevices` fulfilled → `status: "ok"` and the list.
 - [ ] **Step 2: Run.** Expected: FAIL.
 - [ ] **Step 3: Implement.** One private `request<T>(method, path, body?)`. Encode `:id` with `encodeURIComponent`.
 - [ ] **Step 4: Gate.** `pnpm exec tsc --noEmit && pnpm lint && pnpm test src`. Expected: PASS.
