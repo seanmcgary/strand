@@ -615,6 +615,7 @@ const LEASES = {
     GET    /api/devices/:id/strand-groups                   api.getStrandGroups(id)         → string[]
     PUT    /api/devices/:id/strand-groups { keys }          api.putStrandGroups(id, keys)   → LightsView
     PUT    /api/devices/:id/strand-names { names }          api.putStrandNames(id, names)   → LightsView
+           422 invalid_name when a name isn't 1 to 64 characters.
     GET    /api/devices/:id/effects                         api.getEffects(id)              → Effect[]
     GET    /api/devices/:id/palettes                        api.getPalettes(id)             → Palette[]
     GET    /api/devices/:id/scenes                          api.getScenes(id)               → Scene[]
@@ -639,12 +640,23 @@ const LEASES = {
                    normalize: the view differs from the device's segments (a segment made outside
                    Strand read as an All range, a left-out overlapping segment, or uncovered LEDs
                    read as an All range that is off). The strand's first write rewrites it whole.
-    LightsView = { on, bri, strands, segments: { used, max }, notices: string[] }
+    LightsView = { on, bri, strands, segments: { used, max }, notices: string[], matrix: boolean }
+                   matrix: a 2D device; the view has no strands and every write gets 422 invalid_layout.
     Scene      = { id, name, strandKey, ledCount, summary, createdAt, updatedAt }
     LookRecord = { id, name, look: { pattern, slots: SlotLook[] }, createdAt, updatedAt }
     Effect     = { id, name, pal: uses a palette, sliders: labels for sx/ix/c1, checks: labels for o1–o3,
                    colors: labels of the color slots it uses }
     Palette    = { id, name, stops: hex[] }   (stops: a preview gradient)
+
+  Lights and presets errors ({ error, message }, plus need on segment_budget):
+    409 strand_changed   the strand key isn't in the current config
+    409 shared           the strand shares a segment with another strand (Split or Combine first)
+    422 segment_budget   the write needs more segments than are free; body.need = how many more
+    422 invalid_layout   ranges that don't fit the strand, a 2D matrix device, or content too large to save
+    422 invalid_name     a name that isn't 1 to 64 characters
+    422 not_adjacent     a strand group whose strands' LEDs don't touch
+    422 too_many         a device already keeps 256 scenes or 256 looks
+    422 painted          a look saved from a range with painted LEDs
 
   Behaviour: Wi-Fi/AP changes drop the device for 6–10 s, then it rejoins the strongest saved
   network on the air (HomeNet-IoT → 192.168.1.61); 5 GHz networks can't be joined. Hostname and

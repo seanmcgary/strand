@@ -103,7 +103,7 @@ Each range is one or more WLED segments inside its strand. For a range from LED 
 
 The Every N geometry follows the firmware: a segment draws virtual pixel `i` at physical LEDs `start + i·(grp+spc)` to `+grp−1`, and does not draw its spacing LEDs (`wled00/FX_fcn.cpp:1850-1856`). So N overlapping segments each draw one slot.
 
-**Every N limits.** `grp` and `spc` are one byte each (`FX.h:470`). A larger value wraps with no error. So `G ≤ 255` and `(N−1)·G ≤ 255`. Example: N = 16 allows G up to 17; G = 255 allows only N = 2. N is also limited by the free segment budget.
+**Every N limits.** `grp` and `spc` are one byte each (`FX.h:470`). A larger value wraps with no error. So `G ≤ 255` and `(N−1)·G ≤ 255`. Example: N = 16 allows G up to 17; G = 255 allows only N = 2. N is also limited by the free segment budget. The range must also be long enough for every slot to start inside it: `(N − 1)·G < len`. A slot that starts at or past the range end has no LEDs, the firmware makes that segment inactive (`json.cpp:185-191`), and the layout does not read back. The server rejects such a layout with `422 invalid_layout`, the N and G steppers and the boundary handles stop at this limit, and a look skips a range that is too short.
 
 **Segment names.** Strand writes the range name into each segment's `n`, with an ASCII tag for Every N and for Individual:
 
@@ -111,7 +111,7 @@ The Every N geometry follows the firmware: a segment draws virtual pixel `i` at 
 - Every N: `Patio 1/3`, `Patio 2/3`, `Patio 3/3`
 - Individual: `Patio paint`
 
-A range with no user name uses the strand name. The firmware limit is 32 bytes (`FX_fcn.cpp:766`), so Strand cuts the range name by bytes (on a UTF-8 character boundary) to leave room for the whole tag. The tags make the layout readable in the stock UI too. The firmware clears a segment's name when its `start` or `stop` changes and `n` is absent (`json.cpp:144-151`), so Strand sends `n` with every geometry change.
+Every range has a name of 1-64 characters, unique in its strand. On read, a device segment with no name reads as `Range <k>` (k is the range's 1-based position), and when two ranges read back with the same name, the later one gets a suffix (`Porch 2`). The firmware limit is 32 bytes (`FX_fcn.cpp:766`), so Strand cuts the range name by bytes (on a UTF-8 character boundary) to leave room for the whole tag. The tags make the layout readable in the stock UI too. The firmware clears a segment's name when its `start` or `stop` changes and `n` is absent (`json.cpp:144-151`), so Strand sends `n` with every geometry change.
 
 **Reading a layout back** (`readLayout`): for each strand, take the device segments that lie inside the strand. Group them into ranges by the name tag. If there is no tag, group them by geometry (same `stop`, same `grp`, `spc = (N−1)·grp`, starts `G` apart). A segment that fits neither rule becomes an **All** range over its span, with its first color, effect and palette (grouping and spacing are dropped). Segments are taken in ID order; a segment that overlaps a range already read is left out of the view. LEDs that no segment covers become an All range that is off. A strand whose view differs from its device segments (dropped segments, gaps, or All ranges made from such segments) is marked `normalize`; its first write rewrites the whole strand from the view, which deletes the left-out segments. Nothing changes on the device before that write.
 
@@ -156,13 +156,13 @@ WLED has no LED-identify command. Strand flashes an LED with a temporary segment
 1. Create a one-LED segment at the highest free ID: `{"start":i,"stop":i+1,"fx":0,"col":[[255,255,255]],"bri":255,"on":true,"n":"Strand flash"}`. A segment with a higher ID draws on top.
 2. After 3 seconds, delete it (`stop:0`).
 
-The server runs both steps (`POST /api/devices/:id/lights/flash`). It answers after step 1 and deletes the segment 3 seconds later with an in-memory timer. A second flash on the same device ends the first one at once. If the server restarts during the 3 seconds, the segment stays; `GET /api/devices/:id/lights` deletes any segment named "Strand flash" before it reads the layout. The flash needs one free segment; when there is none, the buttons are disabled with the reason.
+The server runs both steps (`POST /api/devices/:id/lights/flash`). It answers after step 1 and deletes the segment 3 seconds later with an in-memory timer. A second flash on the same device ends the first one at once. If the server restarts during the 3 seconds, the segment stays. `GET /api/devices/:id/lights` writes nothing: the view leaves out leftover "Strand flash" segments and dropped combinations, and the next Lights write to that device deletes them. The flash needs one free segment; when there is none, the buttons are disabled with the reason.
 
 ### 6.7 Startup preset
 
 WLED keeps segments only in RAM. A reboot, a power cut, or a save of LED Hardware settings (`wled.cpp:242-245`) loses the layout. So Strand keeps the layout in one reserved WLED preset on each controller:
 
-- **ID 250, name "Strand: startup".** It is an API preset: Strand writes its content directly, with `{"psave":250,"o":true,"n":"Strand: startup","bootps":250, ...content}` (`wled00/presets.cpp:218-265`). The content is the full layout: `on`, `bri`, and every listed segment with its geometry, name, colors, effect, parameters, palette, `on`, `bri`, plus `i` for painted ranges. A normal "save current state" preset is not enough, because the firmware does not save paint.
+- **ID 250, name "Strand: startup".** It is an API preset: Strand writes its content directly, with `{"psave":250,"o":true,"n":"Strand: startup","bootps":250, ...content}` (`wled00/presets.cpp:218-265`). The content is the full layout: every segment ID from 0 to `maxseg − 1` in order. A listed segment is its full body (geometry, name, colors, effect, parameters, palette, `on`, `bri`, plus `i` for painted ranges); an unlisted ID is `{"id":k,"stop":0}`. The firmware applies a `psave` body as live state before it saves it (`json.cpp:466-506`), and at boot it appends a request ID at or above the vector size at the end (`json.cpp:79-84`), so the boot load gives the same layout whatever segments the firmware made at boot, and the live state does not change. The server builds the list from a fresh `GET /json/state` when the timer fires. The content has no top-level `on` or `bri`: at boot the firmware sets the brightness from `def.on`/`def.bri` and then applies the boot preset (`wled.cpp:683-691`), so a preset `on`/`bri` would override the Settings "turn on at boot" value. Segment `on` and `bri` stay, so per-strand power survives a reboot. Global power changes do not schedule a startup write. A normal "save current state" preset is not enough, because the firmware does not save paint.
 - **`bootps: 250`** makes the controller load it at boot, with no Strand server running.
 - **When Strand writes it:** the server writes it 5 seconds after the last Lights API write to that device (layout, slot, power or paint), and 5 seconds after every scene or look apply. It keeps one timer per device in memory and restarts it on each write. Each write rewrites `/presets.json` on the controller's flash, so the 5-second wait keeps it to about one write per editing session. The firmware warns that immediate API-preset saves can corrupt `presets.json` (`presets.cpp:250`), so Strand never sends two saves less than 5 seconds apart.
 - **Another boot preset.** Strand always sets `bootps: 250`, with no question, and replaces any boot preset the user set elsewhere (owner's decision, 2026-11-24). The other preset itself is not deleted.
@@ -311,41 +311,74 @@ type StrandView = { key: string; name: string; pins: number[]; start: number; le
                     shared?: { with: string[] } };                     // segment crosses strands (6.2)
 type LightsView = { on: boolean; bri: number; strands: StrandView[];
                     segments: { used: number; max: number };
-                    notices: string[] };
+                    notices: string[]; matrix: boolean };   // matrix: a 2D device (info.leds.matrix)
+type LightsPatch = { on?: boolean; bri?: number };                    // bri 0-255
+type StrandPatch = { on?: boolean; bri?: number; ranges?: RangeView[] }; // bri 1-255
+type Effect = { id: number; name: string; pal: boolean; sliders: string[]; checks: string[]; colors: string[] };
+type Palette = { id: number; name: string; stops: string[] };        // "#RRGGBB", from /json/palx
+type ApiErrorBody = { error: ErrorCode; message: string; need?: number };
 ```
+
+On a 2D device (`matrix: true`) the view has no strands, the tab shows the §3 message, and every write gets `422 invalid_layout`. Strand `bri` is 1-255: segment `bri: 0` turns the segment off and reads back as 255 (`json.cpp:193-197`, `:597`). `Effect.sliders[k]` labels `["sx","ix","c1","c2","c3"][k]`, `checks[k]` labels `["o1","o2","o3"][k]`, `colors[k]` labels `col[k]`; `""` means hidden, and trailing `""` entries are removed.
 
 | Method and path | Result |
 |---|---|
-| `GET /api/devices/:id/lights` | `LightsView`. Deletes leftover "Strand flash" segments first. |
+| `GET /api/devices/:id/lights` | `LightsView`. Writes nothing: leftover "Strand flash" segments and dropped combinations are left out of the view, and the next Lights write deletes them. |
 | `PATCH /api/devices/:id/lights` `{ on?, bri? }` | `LightsView`. Device power and brightness. Sends paint again on power-on. |
 | `PATCH /api/devices/:id/lights/strands/:key` `{ on?, bri?, ranges? }` | `LightsView`. `ranges` is the strand's full list of `RangeView` . The server compares it with the device and sends only what changed: new geometry or pattern rewrites that range's segments; a slot change patches that slot's segment by ID; a paint change sends `seg.i`. When the strand is marked `normalize`, the server rewrites the whole strand instead. |
 | `POST /api/devices/:id/lights/strands/:key/resolve` `{ action: "split" \| "combine" }` | `LightsView`. The two answers to a shared segment (6.2). |
 | `POST /api/devices/:id/lights/flash` `{ strandKey, led }` | `204`. `led` is relative to the strand (6.6). |
 | `GET /api/devices/:id/strand-groups` | `string[]` (strand keys) |
 | `PUT /api/devices/:id/strand-groups` `{ keys }` | `LightsView`. Each key must name adjacent strands of the current config. |
-| `PUT /api/devices/:id/strand-names` `{ names: Record<string, string> }` | `LightsView` |
+| `PUT /api/devices/:id/strand-names` `{ names: Record<string, string> }` | `LightsView`. `422 invalid_name` for a name outside 1-64 characters. |
 | `GET /api/devices/:id/scenes` | `Scene[]` (`{ id, name, strandKey, ledCount, summary, createdAt, updatedAt }`) |
 | `POST /api/devices/:id/scenes` `{ name, strandKey }` | `201 Scene`. The server snapshots the strand from the device. |
 | `PATCH /api/devices/:id/scenes/:sceneId` `{ name }` | `Scene` |
-| `DELETE /api/devices/:id/scenes/:sceneId` | `204` |
+| `DELETE /api/devices/:id/scenes/:sceneId` | `204`, also when the scene is already gone |
 | `POST /api/devices/:id/scenes/:sceneId/apply` | `{ view: LightsView; warnings: string[] }` |
 | `GET /api/devices/:id/looks` | `LookRecord[]` (`{ id, name, look, createdAt, updatedAt }`) |
 | `POST /api/devices/:id/looks` `{ name, strandKey, range }` | `201 LookRecord`. The server takes the range's pattern and slots from the device. |
 | `PATCH /api/devices/:id/looks/:lookId` `{ name }` | `LookRecord` |
-| `DELETE /api/devices/:id/looks/:lookId` | `204` |
+| `DELETE /api/devices/:id/looks/:lookId` | `204`, also when the look is already gone |
 | `POST /api/devices/:id/looks/:lookId/apply` `{ targets: { strandKey, range?: string }[] }` | `{ view: LightsView; warnings: string[] }` |
 
-- Errors: `409 strand_changed` when a scene's strand key does not exist in the current config; `422 segment_budget` when a write needs more segments than are free (the body gives the number needed).
+- Errors (texts from the design's mock app server):
+
+| Code | Status | Message |
+|---|---|---|
+| `strand_changed` | 409 | "That strand isn't on this controller any more." |
+| `shared` | 409 | "`<strand>` shares a segment with another strand. Choose Split or Combine on the Lights tab first." |
+| `segment_budget` | 422 | "This needs `<n>` more segment(s) and `<free>` is/are free. Remove a range first." The body also has `need: n`. |
+| `invalid_layout` | 422 | "That layout doesn't fit this strand.", "2D matrix layouts aren't supported yet.", or "This setup is too large to save." |
+| `invalid_name` | 422 | "Names need 1 to 64 characters." |
+| `not_adjacent` | 422 | "Only strands whose LEDs touch can be combined." |
+| `too_many` | 422 | "A device can keep 256 scenes." / "A device can keep 256 looks." |
+| `painted` | 422 | "A range with painted LEDs can't be saved as a look." |
+| `not_found` | 404 | "That scene was deleted." / "That look was deleted." / "That range isn't on the strand any more. Pick it again." |
+
+  `strand_changed` is sent when a scene's strand key does not exist in the current config; `segment_budget` when a write needs more segments than are free.
 - Apply sends one `POST /json/state` for the segments (two when the delete rule in section 6.2 splits it), then one `seg.i` request per painted range, then starts the startup-write timer.
 - Limits: name 1-64 characters, at most 256 scenes and 256 looks per device, content at most 64 KB.
 - Strand names move from a browser preference to this endpoint, so the server can use them in segment names.
 - `GET /api/devices/:id/presets` (WLED presets) is not used by any screen. The plan removes it.
 
-**Layout module** (`server/lights/layout.ts`, pure functions, server only):
+**Layout modules** (pure functions, server only). `server/lights/layoutRead.ts` reads:
 
-- `strandsFromConfig(cfg, groupKeys, names): Strand[]`
-- `readLayout(state, strands, effects, paint): LightsView` (without `startup` and `notices`)
-- `writeStrand(state, strand, next, maxseg): { seg: SegPatch[]; paint: SegPatch[] }`
+- `parseState(raw: unknown): WledState`
+- `strandsFromConfig(cfg: WledConfig, groupKeys: string[], names: Record<string, string>): { strands: Strand[]; dropped: string[] }`
+- `segmentName(base: string, tag: "" | "paint" | { k: number; n: number }): string`
+- `decodePaint(i: unknown[], len: number): string[]`, `encodePaint(paint: string[]): (number | string)[]`
+- `readLayout(state: WledState, strands: Strand[], lists: Lists, paint: PaintMap, maxseg: number): Omit<LightsView, "notices" | "matrix">`
+- `readStrand(state: WledState, strand: Strand, lists: Lists, paint: PaintMap): { view: StrandView; segIds: number[][]; inside: number[]; crossing: number[] }`
+
+`server/lights/layoutWrite.ts` writes:
+
+- `validateRanges(strand: Strand, ranges: RangeView[], effectCount: number, opts?: { sharedNames?: boolean }): string | null`
+- `segmentsNeeded(state: WledState, strand: Strand, next: StrandPatch, lists: Lists, paint: PaintMap): number`
+- `writeStrand(state: WledState, strand: Strand, next: StrandPatch, lists: Lists, paint: PaintMap, maxseg: number, opts?: { sharedNames?: boolean }): LayoutWrite`, where `LayoutWrite = { seg: SegPatch[][]; paint: { name: string; i: (number | string)[] }[] }` (one `seg` array per request). It throws `LayoutError` (`segment_budget`, `invalid_layout` or `shared`).
+
+The snapshot functions:
+
 - `snapshotStrand(view, key): StrandSnapshot`, `lookFromRange(range): Look`
 - `applyScene(state, strand, snapshot, effects, maxseg)` and `applyLook(state, targets, look, effects, maxseg)`, each returning `{ seg: SegPatch[]; paint: SegPatch[]; warnings: string[] }`
 
@@ -368,7 +401,7 @@ Round-trip property, tested with generated layouts: `readLayout(apply(writeStran
 
 ## 12. My calls (not the owner's)
 
-1. Segment name tags (`·2/3`, `·paint`) as the primary way to read a layout back, with geometry as the fallback.
+1. Segment name tags (`Patio 1/3`, `Patio paint`) as the primary way to read a layout back, with geometry as the fallback.
 2. Flash with a temporary top segment, not with `seg.i` on the range's own segment.
 3. Strand names as a preference; "Strand 1", "Strand 2" by default.
 4. Applying a look to a strand applies it to each range of the strand; ranges keep their positions.
