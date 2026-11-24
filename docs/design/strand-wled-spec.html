@@ -406,13 +406,6 @@ const SEEDS = [
     fps: 42,
     powered: true,
     extraPins: { 0: "Button" },
-    presets: [
-      { id: 1, name: "Warm White" },
-      { id: 2, name: "Halloween" },
-      { id: 3, name: "Christmas" },
-      { id: 4, name: "Game Day" },
-      { id: 5, name: "Evening" }
-    ],
     state: { on: true, bri: 128 },
     config: {
       id: { name: "Backyard", mdns: "wled-backyard" },
@@ -455,10 +448,6 @@ const SEEDS = [
     fps: 38,
     powered: true,
     pin: "1234",
-    presets: [
-      { id: 1, name: "Warm White" },
-      { id: 2, name: "Christmas" }
-    ],
     state: { on: true, bri: 191 },
     config: {
       id: { name: "Front Roof", mdns: "wled-front-roof" },
@@ -493,7 +482,6 @@ const SEEDS = [
     fps: 42,
     powered: false,
     lastSeenAgoSec: 3 * 3600 + 4 * 60,
-    presets: [],
     state: { on: false, bri: 255 },
     config: {
       id: { name: "Desk Lamp", mdns: "wled-desk-lamp" },
@@ -528,7 +516,6 @@ const SEEDS = [
     uptimeSec: 26 * 3600,
     fps: 42,
     powered: true,
-    presets: [],
     state: { on: false, bri: 128 },
     config: {
       id: { name: "Garage", mdns: "wled-garage" },
@@ -557,7 +544,6 @@ const SEEDS = [
     uptimeSec: 41 * 60,
     fps: 40,
     powered: true,
-    presets: [],
     state: { on: true, bri: 128 },
     config: {
       id: { name: "WLED", mdns: "wled-778899" },
@@ -706,7 +692,6 @@ function seedAll() {
       state: { on: seed.state.on, bri: seed.state.bri, udpn: { send: config.if.sync.send.en, recv: config.if.sync.recv.grp > 0 } },
       config,
       bootConfig: clone(config),
-      presets: clone(seed.presets),
       timers: []
     };
   });
@@ -3015,11 +3000,10 @@ navigate = function (path, opts) {
 // Section: Device
 // ---------------------------------------------------------------------------
 function DeviceSection(config, { d, key, offline }) {
-  const f = useForm(key, () => ({ name: config.id.name, def: { ...config.def } }));
+  const f = useForm(key, () => ({ name: config.id.name, def: { on: config.def.on, bri: config.def.bri } }));
   const v = f.draft;
   const name = v.name.trim();
   const nameError = !name ? "Give the device a name." : name.length > 32 ? `Keep it to 32 characters (${name.length} now).` : "";
-  const presets = q(`${d.id}:presets`, () => api.getPresets(d.id), { enabled: !offline });
   const disabled = f.saving || offline;
 
   return `<div>
@@ -3047,24 +3031,7 @@ function DeviceSection(config, { d, key, offline }) {
             <div class="flex items-baseline justify-between gap-3"><label for="def-bri" class="text-sm font-medium">Boot brightness</label>
               <span class="text-sm tabular-nums">${briToPct(v.def.bri)}% <span class="text-[13px] text-muted-foreground">· ${v.def.bri} of 255</span></span></div>
             ${Slider({ id: "def-bri", value: v.def.bri, label: "Boot brightness", path: "def.bri", disabled })}
-          </div>
-          ${Field({
-            id: "def-ps",
-            label: "Boot preset",
-            control: presets.data
-              ? Select({
-                  id: "def-ps",
-                  value: v.def.ps,
-                  path: "def.ps",
-                  options: [{ v: 0, label: "None" }, ...presets.data.map((p) => ({ v: p.id, label: p.name }))],
-                  disabled: disabled || presets.data.length === 0,
-                })
-              : skel("h-10 w-full"),
-            help:
-              presets.data && presets.data.length === 0
-                ? "This device has no presets yet. Save one from the Presets tab to start with it."
-                : "Starts this preset instead of the last color and effect.",
-          })}`,
+          </div>`,
       })}
     </fieldset>
     ${SaveBar({ dirty: formDirty(f), saving: f.saving, errorCount: nameError ? 1 : 0, save: "saveDevice" })}
@@ -3086,9 +3053,9 @@ A.discard = () => {
 A.saveDevice = async () => {
   const f = S.form;
   const id = f.key.split(":")[0];
-  const fresh = await saveSection(id, "Device settings", { id: { name: f.draft.name.trim() }, def: f.draft.def });
+  const fresh = await saveSection(id, "Device settings", { id: { name: f.draft.name.trim() }, def: { on: f.draft.def.on, bri: f.draft.def.bri } });
   if (fresh && S.form === f) {
-    f.base = { name: fresh.id.name, def: { ...fresh.def } };
+    f.base = { name: fresh.id.name, def: { on: fresh.def.on, bri: fresh.def.bri } };
     f.draft = deepClone(f.base);
     render();
   }
