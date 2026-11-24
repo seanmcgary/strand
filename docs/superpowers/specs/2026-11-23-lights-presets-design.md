@@ -1,7 +1,7 @@
 # Lights and Presets design
 
 Date: 2026-11-23
-Status: draft, waiting for approval (revised: server-side abstraction, no polling)
+Status: approved 2026-11-23
 
 ## 1. Intent
 
