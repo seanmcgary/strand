@@ -1,6 +1,7 @@
 import { isIP } from "node:net";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Config } from "./config";
+import { messages } from "./errors";
 
 /**
  * True for a request to `/api` or a path under it. Reads the matched route's
@@ -64,6 +65,6 @@ function allowed(request: FastifyRequest, config: Config): boolean {
 export function registerRequestGuard(app: FastifyInstance, config: Config): void {
   app.addHook("onRequest", async (request, reply) => {
     if (!isApiRequest(request) || allowed(request, config)) return;
-    return reply.code(403).send({ error: "invalid_request", message: "That request isn't valid." });
+    return reply.code(403).send({ error: "invalid_request", message: messages.invalidRequest() });
   });
 }

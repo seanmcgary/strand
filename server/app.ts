@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from "fastify";
 import fastifyStatic from "@fastify/static";
 import type { Config } from "./config";
+import { ApiError, registerErrorHandler } from "./errors";
 import { isApiRequest, registerRequestGuard } from "./requestGuard";
 import { serializeRequestForLog } from "./requestLogSerializer";
 
@@ -48,6 +49,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     if (isApiRequest(request)) reply.header("cache-control", "no-store");
   });
   registerRequestGuard(app, config);
+  registerErrorHandler(app);
 
   app.register(fastifyStatic, {
     root: config.webDistDir,
@@ -58,7 +60,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
 
   app.setNotFoundHandler(async (request, reply) => {
     if (isApiRequest(request) || (request.method !== "GET" && request.method !== "HEAD")) {
-      return reply.code(404).send({ error: "not_found", message: "That page doesn't exist." });
+      throw new ApiError(404, "not_found", "That page doesn't exist.");
     }
     return reply.sendFile("index.html");
   });
