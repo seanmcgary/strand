@@ -1,3 +1,4 @@
+import { cutBytes, NAME_BYTES, PAINT_TAG, segmentName } from "../../shared/segmentName";
 import type { LightsView, Pattern, RangeView, SlotView, StrandView, WledConfig } from "../../shared/apiTypes";
 
 /**
@@ -45,10 +46,7 @@ export const paintKey = (start: number, name: string): string => `${start}:${nam
 export type Lists = { effects: string[]; palettes: string[] };
 
 export const FLASH_NAME = "Strand flash";
-/** The name tag of an Individual (painted) range's segment. */
-export const PAINT_TAG = " paint";
-/** The firmware's segment name limit on ESP8266 (`const.h:175-180`), the stricter one. */
-export const NAME_BYTES = 32;
+export { NAME_BYTES, PAINT_TAG, segmentName };
 
 const NAME_CHARS = 64;
 const MAX_EVERY = 16;
@@ -62,21 +60,6 @@ const bool = (v: unknown): boolean => (typeof v === "boolean" ? v : false);
 const isColor = (v: unknown): v is number[] => Array.isArray(v) && (v.length === 3 || v.length === 4) && v.every((c) => intIn(c, 0, 255, -1) >= 0);
 const hex = (rgb: number[]): string => `#${rgb.slice(0, 3).map((c) => c.toString(16).padStart(2, "0")).join("").toUpperCase()}`;
 const HEX_COLOR = /^#[0-9A-F]{6}$/;
-
-const encoder = new TextEncoder();
-
-/** The longest prefix of `s` that fits in `max` UTF-8 bytes, cut between code points. */
-function cutBytes(s: string, max: number): string {
-  let out = "";
-  let bytes = 0;
-  for (const ch of s) {
-    const size = encoder.encode(ch).length;
-    if (bytes + size > max) break;
-    out += ch;
-    bytes += size;
-  }
-  return out;
-}
 
 /** The longest prefix of `s` with at most `max` UTF-16 units, cut between code points. */
 function cutChars(s: string, max: number): string {
@@ -166,12 +149,6 @@ export function strandsFromConfig(cfg: WledConfig, groupKeys: string[], names: R
   }
   const strands = [...singles.filter((s) => !grouped.has(s.key)), ...groups].sort((a, b) => a.start - b.start);
   return { strands, dropped };
-}
-
-/** A segment name: the base cut by bytes, on a UTF-8 boundary, so the whole tag fits in `NAME_BYTES`. */
-export function segmentName(base: string, tag: "" | "paint" | { k: number; n: number }): string {
-  const suffix = tag === "" ? "" : tag === "paint" ? PAINT_TAG : ` ${tag.k}/${tag.n}`;
-  return cutBytes(base, NAME_BYTES - encoder.encode(suffix).length) + suffix;
 }
 
 /** One `seg.i` color (6 hex digits, or 3-4 integers 0-255) as "#RRGGBB"; anything else is null. */
