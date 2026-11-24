@@ -41,7 +41,7 @@ describe("buildStartupPreset", () => {
       bri: 128,
       seg: [seg(0, 0, 10, { n: "Porch" }), seg(2, 10, 14, { n: "Peak paint", frz: true }), seg(3, 5, 6, { n: "Strand flash" })],
     });
-    const preset = buildStartupPreset(state, { "Peak paint": peak }, 4);
+    const preset = buildStartupPreset(state, { "10:Peak paint": peak }, 4);
     expect(preset).toEqual({
       psave: 250,
       o: true,
@@ -93,7 +93,7 @@ describe("buildStartupPreset", () => {
       300,
     );
     const before = parseState(listState(sim));
-    applyPost(sim, buildStartupPreset(before, { "Peak paint": peak }, 8));
+    applyPost(sim, buildStartupPreset(before, { "200:Peak paint": peak }, 8));
     bootSim(sim, { on: false, bri: 128 }, outputs ? { outputs } : {});
 
     const after = listState(sim);

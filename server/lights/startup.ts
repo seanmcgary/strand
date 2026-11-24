@@ -1,4 +1,4 @@
-import { decodePaint, encodePaint, FLASH_NAME, isInt, isObject, PAINT_TAG, type PaintMap, type WledState } from "./layoutRead";
+import { decodePaint, encodePaint, FLASH_NAME, isInt, isObject, paintKey, PAINT_TAG, type PaintMap, type WledState } from "./layoutRead";
 
 /**
  * The startup preset (spec §6.7): WLED preset 250, set as the boot preset, so
@@ -22,7 +22,7 @@ export function buildStartupPreset(state: WledState, paint: PaintMap, maxseg: nu
     if (!s || s.n === FLASH_NAME) return { id, stop: 0 };
     const body: Record<string, unknown> = { ...s, col: s.col.map((c) => [...c]) };
     if (!s.n?.endsWith(PAINT_TAG)) return body;
-    const colors = paint[s.n];
+    const colors = paint[paintKey(s.start, s.n)];
     if (colors && colors.length === s.stop - s.start) body.i = encodePaint(colors);
     else delete body.frz;
     return body;
@@ -31,7 +31,7 @@ export function buildStartupPreset(state: WledState, paint: PaintMap, maxseg: nu
 }
 
 /**
- * The paint in `/presets.json`'s preset 250, by segment name. A `seg` entry
+ * The paint in `/presets.json`'s preset 250, by `paintKey`. A `seg` entry
  * counts only when `n` is a string, `i` is an array, and `start` and `stop` give its length.
  */
 export function startupPaint(presets: unknown): PaintMap {
@@ -42,7 +42,7 @@ export function startupPaint(presets: unknown): PaintMap {
     if (!isObject(s) || typeof s.n !== "string" || !Array.isArray(s.i)) continue;
     const { start, stop } = s;
     if (!isInt(start) || !isInt(stop) || stop <= start || stop - start > 65535) continue;
-    out[s.n] = decodePaint(s.i, stop - start);
+    out[paintKey(start, s.n)] = decodePaint(s.i, stop - start);
   }
   return out;
 }

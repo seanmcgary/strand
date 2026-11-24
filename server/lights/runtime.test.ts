@@ -55,7 +55,7 @@ describe("startup timer", () => {
   it("sends the remembered paint and then forgets it", async () => {
     const { f, row, rt } = await setup({ startupDelayMs: 20 });
     twoPainted(f);
-    rt.rememberPaint(row.id, { "A paint": A });
+    rt.rememberPaint(row.id, { "0:A paint": A });
     rt.afterWrite(row);
     await vi.waitFor(() => expect(rt.paintFor(row.id)).toEqual({}));
     expect(segOf(psaves(f)[0]!.body, "A paint")!.i).toEqual(encodePaint(A));
@@ -65,22 +65,22 @@ describe("startup timer", () => {
   it("keeps paint remembered during the save", async () => {
     const { f, row, rt } = await setup({ startupDelayMs: 20 });
     twoPainted(f);
-    rt.rememberPaint(row.id, { "A paint": A });
-    f.afterPost(() => rt.rememberPaint(row.id, { "A paint": B }));
+    rt.rememberPaint(row.id, { "0:A paint": A });
+    f.afterPost(() => rt.rememberPaint(row.id, { "0:A paint": B }));
     rt.afterWrite(row);
     await vi.waitFor(() => expect(psaves(f)).toHaveLength(1));
     await sleep(100);
-    expect(rt.paintFor(row.id)).toEqual({ "A paint": B });
+    expect(rt.paintFor(row.id)).toEqual({ "0:A paint": B });
   });
 
   // Fails if the save stops merging the paint memory over preset 250's paint, so an unedited strand loses its paint.
   it("keeps the paint of strands not edited since the last save", async () => {
     const { f, row, rt } = await setup({ startupDelayMs: 20 });
     twoPainted(f);
-    rt.rememberPaint(row.id, { "A paint": A });
+    rt.rememberPaint(row.id, { "0:A paint": A });
     rt.afterWrite(row);
     await vi.waitFor(() => expect(psaves(f)).toHaveLength(1));
-    rt.rememberPaint(row.id, { "B paint": B });
+    rt.rememberPaint(row.id, { "10:B paint": B });
     rt.afterWrite(row);
     await vi.waitFor(() => expect(psaves(f)).toHaveLength(2));
     const body = psaves(f)[1]!.body;
@@ -122,7 +122,7 @@ describe("startup timer", () => {
     const s = await startLights({ startupDelayMs: 20, seed: bigSeed(16) });
     s.f.applyState({ seg: [{ id: 0, start: 0, stop: 1000, n: "Big paint", frz: true }] });
     const stripes = Array.from({ length: 1000 }, (_, k) => (k % 2 === 0 ? "#FF0000" : "#0000FF"));
-    s.rt.rememberPaint(s.row.id, { "Big paint": stripes });
+    s.rt.rememberPaint(s.row.id, { "0:Big paint": stripes });
     s.rt.afterWrite(s.row);
     await vi.waitFor(() => expect(psaves(s.f)).toHaveLength(1));
     const body = psaves(s.f)[0]!.body as { seg: Record<string, unknown>[] };
@@ -130,7 +130,7 @@ describe("startup timer", () => {
     expect(body.seg[0]).not.toHaveProperty("frz");
     await vi.waitFor(async () => expect((await readDeviceLights(s.deps, s.row)).view.notices).toEqual([notices.paintNotSaved]));
 
-    s.rt.rememberPaint(s.row.id, { "Big paint": Array<string>(1000).fill("#00FF00") });
+    s.rt.rememberPaint(s.row.id, { "0:Big paint": Array<string>(1000).fill("#00FF00") });
     s.rt.afterWrite(s.row);
     await vi.waitFor(() => expect(psaves(s.f)).toHaveLength(2));
     await vi.waitFor(async () => expect((await readDeviceLights(s.deps, s.row)).view.notices).toEqual([]));
@@ -141,7 +141,7 @@ describe("startup timer", () => {
     const s = await startLights({ startupDelayMs: 20, seed: bigSeed(16) });
     s.f.applyState({ seg: [{ id: 0, start: 0, stop: 300, n: "Roof paint", frz: true }] });
     const stripes = Array.from({ length: 300 }, (_, k) => (k % 2 === 0 ? "#FF0000" : "#0000FF"));
-    s.rt.rememberPaint(s.row.id, { "Roof paint": stripes });
+    s.rt.rememberPaint(s.row.id, { "0:Roof paint": stripes });
     s.rt.afterWrite(s.row);
     await vi.waitFor(() => expect(psaves(s.f)).toHaveLength(1));
     const body = psaves(s.f)[0]!.body as { seg: Record<string, unknown>[] };
@@ -173,7 +173,7 @@ describe("startup timer", () => {
   it("forget() cancels the device's timers and paint", async () => {
     const { f, row, rt } = await setup({ startupDelayMs: 50, flashMs: 50 });
     const end = vi.fn(async () => {});
-    rt.rememberPaint(row.id, { "A paint": A });
+    rt.rememberPaint(row.id, { "0:A paint": A });
     rt.startFlash(row.id, end);
     rt.afterWrite(row);
     rt.forget(row.id);

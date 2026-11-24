@@ -2,9 +2,10 @@ import type { FastifyInstance } from "fastify";
 import type { LightsPatch, LightsView, StrandPatch } from "../../shared/apiTypes";
 import type { ServerDeps } from "../app";
 import { ApiError, messages } from "../errors";
+import * as preferences from "../db/preferences";
 import * as strandGroups from "../db/strandGroups";
-import { clearLeftovers, deviceError, flashLed, readDeviceLights, setDevicePower, writeLayout } from "../lights/deviceLights";
-import { LayoutError, splitShared, writeStrand } from "../lights/layoutWrite";
+import { clearLeftovers, deviceError, flashLed, namesOf, readDeviceLights, setDevicePower, writeLayout } from "../lights/deviceLights";
+import { cutRanges, LayoutError, splitShared, writeStrand } from "../lights/layoutWrite";
 import { loadDevice } from "./settings";
 
 const lightsPatchBody = {
@@ -80,6 +81,27 @@ const resolveBody = {
   properties: { action: { enum: ["split", "combine"] } },
 } as const;
 
+const groupsBody = {
+  type: "object",
+  required: ["keys"],
+  additionalProperties: false,
+  properties: { keys: { type: "array", maxItems: 64, items: { type: "string", pattern: "^o\\d+(\\+o\\d+)+$" } } },
+} as const;
+const namesBody = {
+  type: "object",
+  required: ["names"],
+  additionalProperties: false,
+  properties: {
+    names: {
+      type: "object",
+      maxProperties: 64,
+      propertyNames: { pattern: "^o\\d+(\\+o\\d+)*$" },
+      additionalProperties: { type: "string", maxLength: 1024 },
+    },
+  },
+} as const;
+const NAME_CHARS = 64;
+
 export async function lightsRoutes(app: FastifyInstance, deps: ServerDeps): Promise<void> {
   app.get<{ Params: { id: string } }>(
     "/api/devices/:id/lights",
@@ -150,6 +172,66 @@ export async function lightsRoutes(app: FastifyInstance, deps: ServerDeps): Prom
       } catch (err) {
         throw err instanceof LayoutError ? deviceError(err, strand.name) : err;
       }
+    },
+  );
+
+  app.get<{ Params: { id: string } }>("/api/devices/:id/strand-groups", async (request): Promise<string[]> =>
+    strandGroups.list(deps.db, loadDevice(deps, request.params.id).id),
+  );
+
+  app.put<{ Params: { id: string }; Body: { keys: string[] } }>(
+    "/api/devices/:id/strand-groups",
+    { schema: { body: groupsBody } },
+    async (request): Promise<LightsView> => {
+      const row = loadDevice(deps, request.params.id);
+      const { keys } = request.body;
+      let d = await clearLeftovers(deps, await readDeviceLights(deps, row));
+      if (keys.length > d.outputs.length) throw new ApiError(400, "invalid_request", messages.invalidRequest());
+      const used = new Set<string>();
+      for (const key of keys) {
+        const outs = key.split("+").map((m) => d.outputs[Number(m.slice(1))]);
+        const touching = outs.every((o, k) => o !== undefined && (k === 0 || outs[k - 1]!.start + outs[k - 1]!.len === o.start));
+        const fresh = key.split("+").every((m) => !used.has(m));
+        if (!touching || !fresh) throw new ApiError(422, "not_adjacent", messages.notAdjacent());
+        key.split("+").forEach((m) => used.add(m));
+      }
+      // A group that goes away is cut where its outputs meet, before the groups change.
+      const removed = d.strands.filter((s) => s.members.length > 1 && !keys.includes(s.key)).map((s) => s.key);
+      for (const key of removed) {
+        const strand = d.strands.find((s) => s.key === key)!;
+        const ranges = d.view.strands.find((v) => v.key === key)!.ranges;
+        const cut = cutRanges(ranges, strand.members.slice(1).map((m) => d.outputs[Number(m.slice(1))]!.start - strand.start));
+        if (cut.length === ranges.length) continue;
+        try {
+          const write = writeStrand(d.state, strand, { ranges: cut }, d.lists, d.paint, d.view.segments.max, { sharedNames: true });
+          d = await writeLayout(deps, d, write);
+        } catch (err) {
+          throw err instanceof LayoutError ? deviceError(err, strand.name) : err;
+        }
+      }
+      strandGroups.replace(deps.db, row.id, keys);
+      return (await readDeviceLights(deps, row)).view;
+    },
+  );
+
+  app.put<{ Params: { id: string }; Body: { names: Record<string, string> } }>(
+    "/api/devices/:id/strand-names",
+    { schema: { body: namesBody } },
+    async (request): Promise<LightsView> => {
+      const row = loadDevice(deps, request.params.id);
+      const current = new Set((await readDeviceLights(deps, row)).strands.map((s) => s.key));
+      const given = Object.entries(request.body.names);
+      if (given.some(([key]) => !current.has(key))) throw new ApiError(409, "strand_changed", messages.strandChanged());
+      const stored = namesOf(preferences.get(deps.db, `strandNames.${row.id}`));
+      for (const [key, value] of given) {
+        const name = value.trim();
+        if ([...name].length > NAME_CHARS) throw new ApiError(422, "invalid_name", messages.invalidName());
+        if (name === "") delete stored[key];
+        else stored[key] = name;
+      }
+      if (Object.keys(stored).length === 0) preferences.remove(deps.db, `strandNames.${row.id}`);
+      else preferences.put(deps.db, `strandNames.${row.id}`, stored, deps.now());
+      return (await readDeviceLights(deps, row)).view;
     },
   );
 }

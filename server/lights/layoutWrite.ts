@@ -9,7 +9,7 @@ import { encodePaint, FLASH_NAME, isInt, readStrand, segmentName, type Lists, ty
 
 export type SegPatch = { id: number } & Partial<Omit<WledSeg, "id">> & { rev?: boolean; mi?: boolean; i?: (number | string)[] };
 
-export type LayoutWrite = { seg: SegPatch[][]; paint: { name: string; i: (number | string)[] }[] };
+export type LayoutWrite = { seg: SegPatch[][]; paint: { name: string; start: number; i: (number | string)[] }[] };
 
 export type LayoutErrorCode = "segment_budget" | "invalid_layout" | "shared";
 
@@ -166,7 +166,7 @@ function bodies(strand: Strand, r: RangeView, next: StrandPatch, bri: number): B
   });
 }
 
-const paintEntry = (r: RangeView): LayoutWrite["paint"][number] => ({ name: segmentName(r.name.trim(), "paint"), i: encodePaint(r.paint!) });
+const paintEntry = (strand: Strand, r: RangeView): LayoutWrite["paint"][number] => ({ name: segmentName(r.name.trim(), "paint"), start: strand.start + r.start, i: encodePaint(r.paint!) });
 
 function plan(state: WledState, strand: Strand, next: StrandPatch, lists: Lists, paint: PaintMap, opts: { sharedNames?: boolean }): Plan {
   const read = readStrand(state, strand, lists, paint);
@@ -198,7 +198,7 @@ function plan(state: WledState, strand: Strand, next: StrandPatch, lists: Lists,
     if (next.on === undefined && next.bri === undefined) return { creates: [], removed: [], patches: [], paint: [] };
     // A segment `bri` also sets the segment's power (`json.cpp:194-197`), so `on` goes with it.
     const patches = read.inside.map((id) => ({ id, on: next.on ?? seg(id).on, ...(next.bri !== undefined ? { bri: next.bri } : {}) }));
-    const painted = next.on === true ? read.view.ranges.flatMap((r, k) => (r.paint ? [{ name: seg(read.segIds[k]![0]!).n ?? segmentName(r.name, "paint"), i: encodePaint(r.paint) }] : [])) : [];
+    const painted = next.on === true ? read.view.ranges.flatMap((r, k) => (r.paint ? [{ name: seg(read.segIds[k]![0]!).n ?? segmentName(r.name, "paint"), start: strand.start + r.start, i: encodePaint(r.paint) }] : [])) : [];
     return { creates: [], removed: [], patches, paint: painted };
   }
 
@@ -212,7 +212,7 @@ function plan(state: WledState, strand: Strand, next: StrandPatch, lists: Lists,
     const ids = k >= 0 ? read.segIds[k]! : [];
     if (ids.length === 0) {
       creates.push(...bodies(strand, r, next, bri));
-      if (r.pattern.kind === "individual") painted.push(paintEntry(r));
+      if (r.pattern.kind === "individual") painted.push(paintEntry(strand, r));
       continue;
     }
     let renamed = false;
@@ -227,8 +227,8 @@ function plan(state: WledState, strand: Strand, next: StrandPatch, lists: Lists,
       }
       if (Object.keys(p).length > 1) patches.push(p);
     });
-    // The paint memory is keyed by segment name, so a renamed paint is sent again under its new name.
-    if (r.pattern.kind === "individual" && (renamed || !samePaint(r.paint, read.view.ranges[k]!.paint))) painted.push(paintEntry(r));
+    // The paint memory is keyed by segment start and name, so a renamed paint is sent again under its new name.
+    if (r.pattern.kind === "individual" && (renamed || !samePaint(r.paint, read.view.ranges[k]!.paint))) painted.push(paintEntry(strand, r));
   }
   return { creates, removed: read.inside.filter((id) => !kept.has(id)), patches, paint: painted };
 }
@@ -310,4 +310,22 @@ export function splitShared(state: WledState, touched: Strand[], maxseg: number)
   const free = maxseg - state.seg.length;
   if (need > free) throw new LayoutError("segment_budget", messages.segmentBudget(need, free), { need, free });
   return { seg: requestsFor(state, removed, creates, [{ id: first.id, ...bodyOf(touched[0]!) }]), paint: [] };
+}
+
+/**
+ * Cuts `ranges` at `cuts` (offsets in the strand). Each piece keeps the name, pattern and slots;
+ * paint is cut by position. A piece too short for its Every pattern becomes All with its first slot, as `fitRanges` does.
+ */
+export function cutRanges(ranges: RangeView[], cuts: number[]): RangeView[] {
+  return ranges.flatMap((r) => {
+    const edges = [r.start, ...cuts.filter((c) => c > r.start && c < r.start + r.len).sort((a, b) => a - b), r.start + r.len];
+    return edges.slice(1).map((end, k): RangeView => {
+      const from = edges[k]!;
+      const len = end - from;
+      if (len === r.len) return r;
+      const piece = { ...r, start: from, len, ...(r.paint ? { paint: r.paint.slice(from - r.start, end - r.start) } : {}) };
+      const every = r.pattern.kind === "every" ? r.pattern : undefined;
+      return every && (every.n - 1) * every.group >= len ? { ...piece, pattern: { kind: "all" }, slots: [r.slots[0]!] } : piece;
+    });
+  });
 }

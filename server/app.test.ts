@@ -86,6 +86,8 @@ describe("request guard on every route", () => {
     ["POST", "/api/devices/x/lights/flash", { strandKey: "o0", led: 0 }],
     ["PATCH", "/api/devices/x/lights/strands/o0", { bri: 90 }],
     ["POST", "/api/devices/x/lights/strands/o0/resolve", { action: "split" }],
+    ["PUT", "/api/devices/x/strand-groups", { keys: [] }],
+    ["PUT", "/api/devices/x/strand-names", { names: {} }],
     ["PUT", "/api/preferences/k", { value: "v" }],
   ];
   const variants: [string, Record<string, string>][] = [

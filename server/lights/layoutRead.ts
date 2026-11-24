@@ -34,8 +34,13 @@ export type WledState = { on: boolean; bri: number; seg: WledSeg[] };
 
 export type Strand = { key: string; name: string; pins: number[]; start: number; len: number; members: string[] };
 
-/** Segment name → one "#RRGGBB" per LED. */
+/**
+ * Segment key → one "#RRGGBB" per LED. The key is the segment's first LED and name (`paintKey`),
+ * as two strands may each have a painted range of the same name.
+ */
 export type PaintMap = Record<string, string[]>;
+
+export const paintKey = (start: number, name: string): string => `${start}:${name}`;
 
 export type Lists = { effects: string[]; palettes: string[] };
 
@@ -313,7 +318,7 @@ function candidates(inside: WledSeg[], paint: PaintMap): Candidate[] {
     if (used.has(seg.id) || !m || !seg.frz || seg.grp !== 1 || seg.spc !== 0) continue;
     used.add(seg.id);
     const len = seg.stop - seg.start;
-    const known = paint[seg.n!];
+    const known = paint[paintKey(seg.start, seg.n!)];
     const colors = Array.isArray(known) && known.length === len && known.every((c) => HEX_COLOR.test(c)) ? [...known] : Array<string>(len).fill(hex(seg.col[0]!));
     out.push({ name: nameOf(m[1]), start: seg.start, stop: seg.stop, pattern: { kind: "individual" }, segs: [seg], paint: colors, normalize: seg.of !== 0 });
   }

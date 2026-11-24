@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { RangeView, SlotView, StrandPatch } from "../../shared/apiTypes";
 import { seeds } from "../../test/fixtures/seeds";
 import { applyPost, listState, simFromState, type SimState } from "../../test/wledSim";
-import { decodePaint, parseState, readLayout, readStrand, strandsFromConfig, type PaintMap, type Strand, type WledState } from "./layoutRead";
+import { decodePaint, paintKey, parseState, readLayout, readStrand, strandsFromConfig, type PaintMap, type Strand, type WledState } from "./layoutRead";
 import { LayoutError, segmentsNeeded, validateRanges, writeStrand, type LayoutWrite, type SegPatch } from "./layoutWrite";
 
 const lists = { effects: seeds.backyard.effects, palettes: seeds.backyard.palettes };
@@ -159,7 +159,7 @@ describe("writeStrand", () => {
   it("sends the paint of a new Individual range by segment name", () => {
     const paint = [...Array<string>(5).fill("#FF0000"), ...Array<string>(5).fill("#FFFFFF")];
     const peak: RangeView = { name: "Peak", start: 0, len: 10, pattern: { kind: "individual" }, slots: [slot()], paint };
-    expect(write(deviceState(splitBackyard), [peak, all("Rest", 10, 140)]).paint).toEqual([{ name: "Peak paint", i: [0, 5, "FF0000", 5, 10, "FFFFFF"] }]);
+    expect(write(deviceState(splitBackyard), [peak, all("Rest", 10, 140)]).paint).toEqual([{ name: "Peak paint", start: 0, i: [0, 5, "FF0000", 5, 10, "FFFFFF"] }]);
   });
 
   // Fails if turning a strand on does not patch each segment or does not send the paint again.
@@ -169,14 +169,14 @@ describe("writeStrand", () => {
       { id: 0, n: "Peak paint", start: 0, stop: 10, frz: true, on: false },
       { id: 1, n: "Rest", start: 10, stop: 150, on: false },
     ]);
-    expect(writeStrand(state, o0, { on: true }, lists, { "Peak paint": paint }, 32)).toEqual({
+    expect(writeStrand(state, o0, { on: true }, lists, { "0:Peak paint": paint }, 32)).toEqual({
       seg: [
         [
           { id: 0, on: true },
           { id: 1, on: true },
         ],
       ],
-      paint: [{ name: "Peak paint", i: [0, 10, "00FF00"] }],
+      paint: [{ name: "Peak paint", start: 0, i: [0, 10, "00FF00"] }],
     });
   });
 
@@ -372,8 +372,8 @@ describe("round trip", () => {
           send(s, w);
           const after = stateOf(s);
           for (const entry of w.paint) {
-            const seg = after.seg.find((g) => g.n === entry.name)!;
-            paint[entry.name] = decodePaint(entry.i, seg.stop - seg.start);
+            const seg = after.seg.find((g) => g.n === entry.name && g.start === entry.start)!;
+            paint[paintKey(entry.start, entry.name)] = decodePaint(entry.i, seg.stop - seg.start);
           }
         };
         const others = () => (listState(s).seg as { start: number }[]).filter((g) => g.start >= len);

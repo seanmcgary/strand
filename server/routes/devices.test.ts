@@ -5,6 +5,7 @@ import { startFakeWled, type FakeWled } from "../../test/fakeWled";
 import { seeds } from "../../test/fixtures/seeds";
 import { makeTestApp } from "../../test/testApp";
 import * as devices from "../db/devices";
+import * as preferences from "../db/preferences";
 
 vi.mock("node:dns/promises", () => ({ lookup: vi.fn() }));
 
@@ -236,5 +237,26 @@ describe("DELETE /api/devices/:id", () => {
     const again = await t.inject({ method: "DELETE", url: `/api/devices/${row.id}` });
     expect(again.statusCode).toBe(404);
     expect(again.json()).toMatchObject({ error: "not_found" });
+  });
+
+  // Fails if delete leaves the device's strandNames preference behind.
+  it("removes the device's strand names", async () => {
+    const t = makeTestApp();
+    const f = await fake(seeds.backyard);
+    const row = t.addFake(f, seeds.backyard);
+    preferences.put(t.db, `strandNames.${row.id}`, { o0: "Eaves" }, new Date());
+    await t.inject({ method: "DELETE", url: `/api/devices/${row.id}` });
+    expect(preferences.get(t.db, `strandNames.${row.id}`)).toBeUndefined();
+  });
+
+  // Fails if delete does not call lights.forget, so the flash timer still deletes the flash segment of a removed device.
+  it("cancels the device's flash timer", async () => {
+    const t = makeTestApp({ flashMs: 50 });
+    const f = await fake(seeds.backyard);
+    const row = t.addFake(f, seeds.backyard);
+    await t.inject({ method: "POST", url: `/api/devices/${row.id}/lights/flash`, payload: { strandKey: "o0", led: 0 } });
+    await t.inject({ method: "DELETE", url: `/api/devices/${row.id}` });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect((f.state.seg as { n?: string }[]).filter((g) => g.n === "Strand flash")).toHaveLength(1);
   });
 });

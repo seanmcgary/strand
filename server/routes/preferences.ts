@@ -25,6 +25,8 @@ export async function preferencesRoutes(app: FastifyInstance, deps: AppDeps): Pr
     async (request, reply) => {
       const { key } = request.params;
       const { value } = request.body;
+      // Strand names are written by `PUT /api/devices/:id/strand-names`, which checks them.
+      if (key.startsWith("strandNames.")) throw new ApiError(400, "invalid_request", messages.invalidRequest());
       if (Buffer.byteLength(JSON.stringify(value)) > MAX_VALUE_BYTES) {
         throw new ApiError(400, "invalid_request", messages.invalidRequest());
       }

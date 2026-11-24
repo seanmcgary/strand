@@ -29,7 +29,7 @@ export type LightsRuntime = {
   run<T>(deviceId: string, fn: () => Promise<T>): Promise<T>;
   /** Restarts the device's startup-preset timer. */
   afterWrite(row: devices.DeviceRow): void;
-  /** Merges paint (segment name → colors) into the device's paint memory. */
+  /** Merges paint (`paintKey` → colors) into the device's paint memory. */
   rememberPaint(deviceId: string, paint: PaintMap): void;
   paintFor(deviceId: string): PaintMap;
   /** What the last startup save of the device left out, or null. */

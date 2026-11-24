@@ -415,3 +415,127 @@ describe("strand edit and resolve", () => {
     expect(psaves(s.f)).toHaveLength(1);
   });
 });
+
+describe("strand groups and names", () => {
+  const putGroups = (s: Awaited<ReturnType<typeof setup>>, payload: unknown) =>
+    s.t.inject({ method: "PUT", url: s.url("strand-groups"), payload: payload as object });
+  const putNames = (s: Awaited<ReturnType<typeof setup>>, payload: unknown) =>
+    s.t.inject({ method: "PUT", url: s.url("strand-names"), payload: payload as object });
+  const combined = async (segments: object[]) => {
+    const s = await setup();
+    strandGroups.replace(s.t.db, s.row.id, ["o0+o1"]);
+    s.f.applyState({ seg: segments });
+    s.f.requests.length = 0;
+    return s;
+  };
+  const strandOf = async (s: Awaited<ReturnType<typeof setup>>, key: string) =>
+    (await s.t.inject({ method: "GET", url: s.url("lights") })).json<LightsView>().strands.find((v) => v.key === key)!;
+  const three = [seg(0, "Left", 0, 100), seg(1, "Middle", 100, 200), seg(2, "Right", 200, 300)];
+
+  // Fails if the PUT strand-groups and GET strand-groups routes are missing, or a new group writes to the device.
+  it("combines two outputs without a device write", async () => {
+    const s = await setup();
+    s.f.applyState({ seg: [seg(0, "Left", 0, 150), seg(1, "Right", 150, 300)] });
+    s.f.requests.length = 0;
+    const res = await putGroups(s, { keys: ["o0+o1"] });
+    expect(res.statusCode).toBe(200);
+    expect(res.json<LightsView>().strands.map((v) => v.key)).toEqual(["o0+o1"]);
+    const got = await s.t.inject({ method: "GET", url: s.url("strand-groups") });
+    expect(got.json()).toEqual(["o0+o1"]);
+    expect(posts(s.f)).toEqual([]);
+  });
+
+  // Fails if the handler does not check that the outputs exist, touch in key order and sit in one key only.
+  it.each([["o0+o2"], ["o1+o0"], ["o0+o1", "o0+o1"]])("answers 422 not_adjacent for %j", async (...keys) => {
+    const s = await setup();
+    const res = await putGroups(s, { keys });
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toMatchObject({ error: "not_adjacent" });
+  });
+
+  // Fails if the keys schema, or the more-keys-than-outputs check, is missing.
+  it.each([[{ keys: ["o0"] }], [{ keys: "o0+o1" }], [{ keys: [], x: 1 }], [{ keys: ["o0+o1", "o0+o1", "o0+o1"] }]])(
+    "answers 400 invalid_request for %j",
+    async (body) => {
+      const res = await putGroups(await setup(), body);
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ error: "invalid_request" });
+    },
+  );
+
+  // Fails if removing a group does not cut a range that crosses the member boundary.
+  it("cuts a range at the boundary when the group is removed", async () => {
+    const s = await combined(three);
+    const res = await putGroups(s, { keys: [] });
+    expect(res.statusCode).toBe(200);
+    expect(strandGroups.list(s.t.db, s.row.id)).toEqual([]);
+    const middle = segsOf(s.f).filter((g) => g.n === "Middle").map((g) => [g.start, g.stop]);
+    expect(middle.sort()).toEqual([[100, 150], [150, 200]]);
+  });
+
+  // Fails if the paint is not cut by position between the two pieces.
+  it("cuts the paint of a crossing Individual range", async () => {
+    const s = await combined([]);
+    const colors = [...Array<string>(50).fill("#FF0000"), ...Array<string>(50).fill("#0000FF")];
+    const body = [seg(0, "Left", 0, 100), seg(1, "Paint paint", 100, 200, { frz: true, i: encodePaint(colors) }), seg(2, "Right", 200, 300)];
+    s.f.applyState({ seg: body });
+    s.f.applyState({ psave: 250, o: true, n: "Strand: startup", seg: body });
+    await putGroups(s, { keys: [] });
+    const paintOf = async (key: string) => (await strandOf(s, key)).ranges.find((r) => r.name === "Paint")?.paint;
+    expect(await paintOf("o0")).toEqual(Array(50).fill("#FF0000"));
+    expect(await paintOf("o1")).toEqual(Array(50).fill("#0000FF"));
+  });
+
+  // Fails if a piece too short for its Every pattern is not made an All range with the first slot.
+  it("turns a piece too short for its Every pattern into All", async () => {
+    const dots = [0, 1, 2].map((k) => seg(k + 1, `Dots ${k + 1}/3`, 146 + k * 2, 200, { grp: 2, spc: 4, fx: k + 1 }));
+    const s = await combined([seg(0, "Before", 0, 146), ...dots, seg(4, "After", 200, 300)]);
+    const res = await putGroups(s, { keys: [] });
+    expect(res.statusCode).toBe(200);
+    const dotsOf = async (key: string) => (await strandOf(s, key)).ranges.find((r) => r.name === "Dots")!;
+    const first = await dotsOf("o0");
+    expect([first.start, first.len, first.pattern, first.slots.map((x) => x.fx)]).toEqual([146, 4, { kind: "all" }, [1]]);
+    const second = await dotsOf("o1");
+    expect([second.start, second.len, second.pattern]).toEqual([0, 50, { kind: "every", n: 3, group: 2 }]);
+  });
+
+  // Fails if the groups are saved before the device write, or a failed write still changes them.
+  it("keeps the groups when the device write fails", async () => {
+    const s = await combined(three);
+    s.f.failNext("timeout", { method: "POST", path: "/json/state" });
+    const res = await putGroups(s, { keys: [] });
+    expect(res.statusCode).toBe(504);
+    expect(strandGroups.list(s.t.db, s.row.id)).toEqual(["o0+o1"]);
+  });
+
+  // Fails if the PUT strand-names route is missing, or does not store the trimmed name under strandNames.<id>.
+  it("renames a strand and clears the name with an empty value", async () => {
+    const s = await setup();
+    const named = await putNames(s, { names: { o0: " Eaves " } });
+    expect(named.statusCode).toBe(200);
+    expect(named.json<LightsView>().strands[0]!.name).toBe("Eaves");
+    const cleared = await putNames(s, { names: { o0: "  " } });
+    expect(cleared.json<LightsView>().strands[0]!.name).toBe("Strand 1");
+  });
+
+  // Fails if a key that is not a current strand is stored.
+  it("answers 409 strand_changed for a strand that is not there", async () => {
+    const res = await putNames(await setup(), { names: { o9: "x" } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: "strand_changed" });
+  });
+
+  // Fails if the 64-character limit is not applied to the trimmed name.
+  it("answers 422 invalid_name for a name over 64 characters", async () => {
+    const res = await putNames(await setup(), { names: { o0: "x".repeat(65) } });
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toEqual({ error: "invalid_name", message: "Names need 1 to 64 characters." });
+  });
+
+  // Fails if the names schema accepts a non-string name, an extra key or a key that is not a strand key.
+  it.each([[{ names: { o0: 5 } }], [{ names: {}, x: 1 }], [{ names: { "a b": "x" } }]])("answers 400 invalid_request for %j", async (body) => {
+    const res = await putNames(await setup(), body);
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error: "invalid_request" });
+  });
+});

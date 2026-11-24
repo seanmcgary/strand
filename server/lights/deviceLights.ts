@@ -13,6 +13,7 @@ import {
   FLASH_NAME,
   isInt,
   isObject,
+  paintKey,
   PAINT_TAG,
   parseState,
   readLayout,
@@ -37,6 +38,8 @@ export type DeviceLights = {
   state: WledState;
   info: WledInfo;
   lists: Lists;
+  /** The LED outputs in `/json/cfg` order: output `oN` is `outputs[N]`. */
+  outputs: { start: number; len: number }[];
   strands: Strand[];
   dropped: string[];
   paint: PaintMap;
@@ -73,7 +76,8 @@ function outputsOf(cfg: unknown, name: string): WledConfig {
   return { hw: { led: { ins } } } as unknown as WledConfig;
 }
 
-function namesOf(value: unknown): Record<string, string> {
+/** The strand names a `strandNames.<id>` preference holds: its string values. */
+export function namesOf(value: unknown): Record<string, string> {
   if (!isObject(value)) return {};
   return Object.fromEntries(Object.entries(value).filter((e): e is [string, string] => typeof e[1] === "string"));
 }
@@ -118,7 +122,8 @@ export async function readDeviceLights(deps: ServerDeps, row: DeviceRow): Promis
   const paint = state.seg.some(isPainted) ? await readPaint(deps, row) : deps.lights.paintFor(row.id);
   const names = namesOf(preferences.get(deps.db, `strandNames.${row.id}`));
   const { strands, dropped } = strandsFromConfig(cfg, strandGroups.list(deps.db, row.id), names);
-  const d = { row, state, info, lists, strands, dropped, paint };
+  const outputs = cfg.hw.led.ins.map((o) => ({ start: o.start, len: o.len }));
+  const d = { row, state, info, lists, outputs, strands, dropped, paint };
   return { ...d, view: viewOf(deps, d, maxseg, isObject((info.leds as unknown as Json).matrix)) };
 }
 
@@ -182,7 +187,7 @@ export async function flashLed(deps: ServerDeps, d: DeviceLights, start: number)
 }
 
 /**
- * Sends a layout write: each `seg` request, then the paint, by segment name
+ * Sends a layout write: each `seg` request, then the paint, by segment start and name
  * after a fresh read of the state. It remembers the paint, restarts the
  * startup timer, and returns the device's lights as they are now.
  */
@@ -198,15 +203,15 @@ export async function writeLayout(deps: ServerDeps, d: DeviceLights, write: Layo
       for (const seg of write.seg) await post({ seg });
       if (write.paint.length === 0) return;
       const state = parseState(await deviceRequest<unknown>(deps, target, "/json/state"));
-      const byName = new Map(state.seg.filter((s) => s.n !== undefined).map((s) => [s.n!, s]));
-      if (write.paint.some((p) => !byName.has(p.name))) throw new ApiError(409, "strand_changed", messages.strandChanged());
+      const byKey = new Map(state.seg.filter((s) => s.n !== undefined).map((s) => [paintKey(s.start, s.n!), s]));
+      if (write.paint.some((p) => !byKey.has(paintKey(p.start, p.name)))) throw new ApiError(409, "strand_changed", messages.strandChanged());
       // Remembered before it is sent: after a failed chunk the next save then writes the new paint, never the old.
       deps.lights.rememberPaint(
         d.row.id,
-        Object.fromEntries(write.paint.map((p) => [p.name, decodePaint(p.i, byName.get(p.name)!.stop - byName.get(p.name)!.start)])),
+        Object.fromEntries(write.paint.map((p) => [paintKey(p.start, p.name), decodePaint(p.i, byKey.get(paintKey(p.start, p.name))!.stop - p.start)])),
       );
       for (const p of write.paint) {
-        const id = byName.get(p.name)!.id;
+        const id = byKey.get(paintKey(p.start, p.name))!.id;
         for (const i of splitRuns(p.i, (part) => ({ seg: { id, i: part } }), d.info.arch)) await post({ seg: { id, i } });
       }
     });
@@ -236,8 +241,8 @@ async function sendPower(deps: ServerDeps, row: DeviceRow, patch: LightsPatch): 
   const painted = state.seg.filter((s) => isPainted(s) && s.grp === 1 && s.spc === 0);
   const paint = painted.length > 0 ? await readPaint(deps, row) : {};
   const items = painted
-  .filter((s) => paint[s.n!]?.length === s.stop - s.start)
-  .map((s) => ({ id: s.id, i: encodePaint(paint[s.n!]!) }));
+  .filter((s) => paint[paintKey(s.start, s.n!)]?.length === s.stop - s.start)
+  .map((s) => ({ id: s.id, i: encodePaint(paint[paintKey(s.start, s.n!)]!) }));
 
   // The first request carries the whole segments' paint that fits the device; the rest follows in requests that fit.
   const info = items.length > 0 ? await deviceRequest<unknown>(deps, target, "/json/info") : undefined;

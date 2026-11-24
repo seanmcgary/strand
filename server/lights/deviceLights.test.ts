@@ -51,8 +51,8 @@ describe("writeLayout", () => {
     const d = await readDeviceLights(s.deps, s.row);
     const stripes = Array.from({ length: 600 }, (_, k) => (k % 2 === 0 ? "#FF0000" : "#0000FF"));
     s.f.failNext("serverError", { method: "POST", path: "/json/state", skip: 1 });
-    await expect(writeLayout(s.deps, d, { seg: [], paint: [{ name: "Big paint", i: encodePaint(stripes) }] })).rejects.toThrow();
-    expect(s.rt.paintFor(s.row.id)).toEqual({ "Big paint": stripes });
+    await expect(writeLayout(s.deps, d, { seg: [], paint: [{ name: "Big paint", start: 0, i: encodePaint(stripes) }] })).rejects.toThrow();
+    expect(s.rt.paintFor(s.row.id)).toEqual({ "0:Big paint": stripes });
   });
 });
 
@@ -94,7 +94,7 @@ describe("paint requests", () => {
     s.f.applyState({ seg: [{ id: 0, start: 0, stop: 300, n: "Roof paint", frz: true }] });
     const d = await readDeviceLights(s.deps, s.row);
     const stripes = Array.from({ length: 300 }, (_, k) => (k % 2 === 0 ? "#FF0000" : "#0000FF"));
-    await writeLayout(s.deps, d, { seg: [], paint: [{ name: "Roof paint", i: encodePaint(stripes) }] });
+    await writeLayout(s.deps, d, { seg: [], paint: [{ name: "Roof paint", start: 0, i: encodePaint(stripes) }] });
     const paintPosts = s.f.requests.filter((r) => r.method === "POST" && (r.body as { seg?: { i?: unknown } }).seg?.i !== undefined);
     expect(paintPosts.length).toBeGreaterThan(1);
     expect(s.f.pixels(0)).toEqual(stripes);

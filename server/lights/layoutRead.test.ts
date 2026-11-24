@@ -104,7 +104,7 @@ describe("readLayout", () => {
       { id: 1, n: "Peak paint", start: 200, stop: 300, frz: true, col: [[255, 0, 0]] },
     ];
     const paint = Array.from({ length: 100 }, (_, k) => (k % 10 < 5 ? "#FF0000" : "#FFFFFF"));
-    const withPaint = read(seg, frontRoof, { "Peak paint": paint }).strands[0]!.ranges[1]!;
+    const withPaint = read(seg, frontRoof, { "200:Peak paint": paint }).strands[0]!.ranges[1]!;
     expect(withPaint).toMatchObject({ name: "Peak", start: 200, len: 100, pattern: { kind: "individual" }, paint });
     expect(read(seg, frontRoof).strands[0]!.ranges[1]!.paint).toEqual(Array(100).fill("#FF0000"));
   });

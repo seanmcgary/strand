@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { makeTestApp } from "../../test/testApp";
+import * as preferences from "../db/preferences";
 
 const put = (t: ReturnType<typeof makeTestApp>, key: string, value: unknown) =>
   t.inject({ method: "PUT", url: `/api/preferences/${encodeURIComponent(key)}`, payload: { value } });
@@ -32,5 +33,15 @@ describe("preferences", () => {
     for (let i = 0; i < 256; i++) expect((await put(t, `k${i}`, i)).statusCode).toBe(204);
     expect((await put(t, "extra", 1)).statusCode).toBe(400);
     expect((await put(t, "k0", "new")).statusCode).toBe(204);
+  });
+
+  // Fails if the route accepts a key under strandNames., which only PUT strand-names may write.
+  it("refuses a strandNames. key and leaves the preference alone", async () => {
+    const t = makeTestApp();
+    preferences.put(t.db, "strandNames.d1", { o0: "Eaves" }, new Date());
+    const res = await put(t, "strandNames.d1", { o0: "x" });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error: "invalid_request" });
+    expect(preferences.get(t.db, "strandNames.d1")).toEqual({ o0: "Eaves" });
   });
 });

@@ -4,6 +4,7 @@ import type { Device, DiscoveredDevice, WledInfo } from "../../shared/apiTypes";
 import type { AppDeps, ServerDeps } from "../app";
 import * as devices from "../db/devices";
 import type { DeviceRow } from "../db/devices";
+import * as preferences from "../db/preferences";
 import { ApiError, messages } from "../errors";
 import { deviceRequest, fetchInfo, RESOLVE_TIMEOUT_MS, type DeviceTarget } from "../wled/deviceClient";
 
@@ -170,6 +171,8 @@ export async function devicesRoutes(app: FastifyInstance, deps: ServerDeps): Pro
 
   app.delete<{ Params: { id: string } }>("/api/devices/:id", async (request, reply) => {
     if (!devices.remove(deps.db, request.params.id)) throw new ApiError(404, "not_found", messages.notFound());
+    preferences.remove(deps.db, `strandNames.${request.params.id}`);
+    deps.lights.forget(request.params.id);
     return reply.code(204).send();
   });
 }
