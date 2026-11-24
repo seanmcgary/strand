@@ -62,7 +62,14 @@ export async function readInfo(deps: AppDeps, row: DeviceRow): Promise<WledInfo>
       ap: wifi.ap,
       ...(wifi.ssid === undefined ? {} : { ssid: wifi.ssid }),
     },
-    leds: { count: leds.count, fps: leds.fps, pwr: leds.pwr, maxpwr: leds.maxpwr, maxseg: leds.maxseg },
+    leds: {
+      count: leds.count,
+      fps: leds.fps,
+      pwr: leds.pwr,
+      maxpwr: leds.maxpwr,
+      maxseg: leds.maxseg,
+      ...(isObject(leds.matrix) ? { matrix: { w: leds.matrix.w, h: leds.matrix.h } } : {}),
+    },
     live: raw.live,
   } as WledInfo;
   // A recovery during the request saved the new address, so read it back instead of writing the old one.

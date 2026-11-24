@@ -57,6 +57,8 @@ export interface WledInfo {
     pwr: number;
     maxpwr: number;
     maxseg: number;
+    /** Present only on a 2D device. */
+    matrix?: { w: number; h: number };
   };
   live: boolean;
 }
@@ -183,10 +185,116 @@ export type ErrorCode =
   | "unsupported_change"
   | "device_error"
   | "device_busy"
-  | "device_offline";
+  | "device_offline"
+  | "strand_changed"
+  | "shared"
+  | "segment_budget"
+  | "invalid_layout"
+  | "invalid_name"
+  | "not_adjacent"
+  | "too_many"
+  | "painted";
 
 /** Every API error body. `message` is a sentence the UI shows to the user. */
 export interface ApiErrorBody {
   error: ErrorCode;
   message: string;
+  /** `segment_budget` only: how many more segments the write needs. */
+  need?: number;
 }
+
+/** One slot's colors, effect and palette. Effects and palettes are kept by ID and by name. */
+export type SlotLook = {
+  col: number[][];
+  fx: number;
+  fxName: string;
+  sx: number;
+  ix: number;
+  c1: number;
+  c2: number;
+  c3: number;
+  o1: boolean;
+  o2: boolean;
+  o3: boolean;
+  pal: number;
+  palName: string;
+};
+
+export type Pattern = { kind: "all" } | { kind: "every"; n: number; group: number } | { kind: "individual" };
+
+/** A range's pattern and slots, without its position. A painted range has no look. */
+export type Look = { pattern: Exclude<Pattern, { kind: "individual" }>; slots: SlotLook[] };
+
+/** A range as a scene keeps it. `start` is relative to the strand; `paint` is one hex color per LED. */
+export type RangeSnapshot = {
+  name: string;
+  start: number;
+  len: number;
+  pattern: Pattern;
+  slots: SlotLook[];
+  paint?: string[];
+};
+
+/** A strand as a scene keeps it. */
+export type StrandSnapshot = { on: boolean; bri: number; ranges: RangeSnapshot[] };
+
+export type SlotView = SlotLook & { on: boolean };
+
+/** A range on the Lights tab. `start` is relative to the strand. */
+export type RangeView = {
+  name: string;
+  start: number;
+  len: number;
+  pattern: Pattern;
+  slots: SlotView[];
+  paint?: string[];
+};
+
+/** One LED output, or adjacent outputs combined (`key` "o0+o1"). */
+export type StrandView = {
+  key: string;
+  name: string;
+  pins: number[];
+  start: number;
+  len: number;
+  on: boolean;
+  bri: number;
+  ranges: RangeView[];
+  /** The view differs from the device's segments; the strand's first write rewrites it whole. */
+  normalize: boolean;
+  /** A segment crosses into these uncombined strands. */
+  shared?: { with: string[] };
+};
+
+export type LightsView = {
+  on: boolean;
+  bri: number;
+  strands: StrandView[];
+  segments: { used: number; max: number };
+  notices: string[];
+  /** A 2D device: no strands, and every write gets `invalid_layout`. */
+  matrix: boolean;
+};
+
+/** The body of `PATCH /api/devices/:id/lights`. `bri` 0-255. */
+export type LightsPatch = { on?: boolean; bri?: number };
+
+/** The body of `PATCH /api/devices/:id/lights/strands/:key`. `bri` 1-255; `ranges` is the strand's full list. */
+export type StrandPatch = { on?: boolean; bri?: number; ranges?: RangeView[] };
+
+export type Scene = {
+  id: string;
+  name: string;
+  strandKey: string;
+  ledCount: number;
+  summary: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type LookRecord = { id: string; name: string; look: Look; createdAt: string; updatedAt: string };
+
+/** Where a look goes: a whole strand, or one range of it by name. */
+export type LookTarget = { strandKey: string; range?: string };
+
+export type ApplyResult = { view: LightsView; warnings: string[] };

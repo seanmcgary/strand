@@ -55,6 +55,16 @@ describe("GET info shape", () => {
     const res = await t.inject({ method: "GET", url: `/api/devices/${row.id}/info` });
     expect(res.json()).not.toHaveProperty("u");
   });
+
+  // Fails if readInfo drops leds.matrix, which marks a 2D device.
+  it("passes leds.matrix through on a 2D device", async () => {
+    const t = makeTestApp();
+    const f = await startFakeWled(seeds.backyard, { infoOverride: { leds: { ...seeds.backyard.info.leds, matrix: { w: 16, h: 8 } } } });
+    fakes.push(f);
+    const row = t.addFake(f, seeds.backyard);
+    const res = await t.inject({ method: "GET", url: `/api/devices/${row.id}/info` });
+    expect(res.json<WledInfo>().leds.matrix).toEqual({ w: 16, h: 8 });
+  });
 });
 
 describe("GET info address recovery", () => {

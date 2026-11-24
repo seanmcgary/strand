@@ -24,3 +24,13 @@ export function put(db: DatabaseSync, key: string, value: unknown, now: Date): v
   )
   .run(key, JSON.stringify(value), now.toISOString());
 }
+
+/** A preference's parsed value, or undefined when it is not set. */
+export function get(db: DatabaseSync, key: string): unknown {
+  const r = db.prepare("SELECT value FROM preferences WHERE key = ?").get(key) as { value: string } | undefined;
+  return r === undefined ? undefined : JSON.parse(r.value);
+}
+
+export function remove(db: DatabaseSync, key: string): void {
+  db.prepare("DELETE FROM preferences WHERE key = ?").run(key);
+}

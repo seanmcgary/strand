@@ -1,16 +1,18 @@
 import type { FastifyError, FastifyInstance } from "fastify";
 import type { ApiErrorBody, ErrorCode } from "../shared/apiTypes";
 
-/** An expected failure. The error handler sends it as `status` with `{ error: code, message }`. */
+/** An expected failure. The error handler sends it as `status` with `{ error: code, message }`, plus `need` when set. */
 export class ApiError extends Error {
   status: number;
   code: ErrorCode;
+  need?: number;
 
-  constructor(status: number, code: ErrorCode, message: string) {
+  constructor(status: number, code: ErrorCode, message: string, extra?: { need: number }) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
+    if (extra) this.need = extra.need;
   }
 }
 
@@ -28,6 +30,22 @@ export const messages = {
   firmwareUnsupported: (name: string): string =>
     `${name} runs a firmware version that this app does not support.`,
   invalidRequest: (): string => "That request isn't valid.",
+  strandChanged: (): string => "That strand isn't on this controller any more.",
+  shared: (strand: string): string =>
+    `${strand} shares a segment with another strand. Choose Split or Combine on the Lights tab first.`,
+  segmentBudget: (need: number, free: number): string =>
+    `This needs ${need} more segment${need === 1 ? "" : "s"} and ${free} ${free === 1 ? "is" : "are"} free. Remove a range first.`,
+  invalidLayout: (): string => "That layout doesn't fit this strand.",
+  matrixLayout: (): string => "2D matrix layouts aren't supported yet.",
+  contentTooLarge: (): string => "This setup is too large to save.",
+  invalidName: (): string => "Names need 1 to 64 characters.",
+  notAdjacent: (): string => "Only strands whose LEDs touch can be combined.",
+  tooManyScenes: (): string => "A device can keep 256 scenes.",
+  tooManyLooks: (): string => "A device can keep 256 looks.",
+  painted: (): string => "A range with painted LEDs can't be saved as a look.",
+  sceneGone: (): string => "That scene was deleted.",
+  lookGone: (): string => "That look was deleted.",
+  rangeGone: (): string => "That range isn't on the strand any more. Pick it again.",
 };
 
 function isClientError(error: unknown): error is FastifyError {
@@ -38,7 +56,7 @@ function isClientError(error: unknown): error is FastifyError {
 /**
  * Sends every error as `{ error, message }`:
  *
- * - an `ApiError` as its own status, with `Retry-After: 1` for `device_busy`;
+ * - an `ApiError` as its own status, with `need` when it has one and `Retry-After: 1` for `device_busy`;
  * - a Fastify client error (bad or empty JSON, 413, 415, schema validation) as
  *   its status with `invalid_request`. It is not logged: its message can echo
  *   the request body, which can hold a PIN;
@@ -48,7 +66,11 @@ export function registerErrorHandler(app: FastifyInstance): void {
   app.setErrorHandler(async (error, request, reply) => {
     if (error instanceof ApiError) {
       if (error.code === "device_busy") reply.header("retry-after", "1");
-      const body: ApiErrorBody = { error: error.code, message: error.message };
+      const body: ApiErrorBody = {
+        error: error.code,
+        message: error.message,
+        ...(error.need === undefined ? {} : { need: error.need }),
+      };
       return reply.code(error.status).send(body);
     }
     if (isClientError(error)) {
