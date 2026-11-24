@@ -44,13 +44,13 @@ Binding rules this change can touch:
 
 | Field         | Value                                                              |
 |---------------|--------------------------------------------------------------------|
-| stage         | 2 (plan review)                                                    |
+| stage         | 3 (implementation)                                                 |
 | class         | large (new schema, new public API, new screens, in-memory timers)  |
 | profile       | frontend + backend + seam                                          |
 | branch        | feat/app-server                                                    |
 | pr            | #1                                                                 |
 | design assets | docs/design/strand-wled-spec.html                                  |
-| gate          | pending                                                            |
+| gate          | approved 2026-11-24                                                |
 | round         | 0                                                                  |
 | decisions     | 0                                                                  |
 
