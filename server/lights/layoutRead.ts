@@ -352,13 +352,16 @@ function candidates(inside: WledSeg[], paint: PaintMap): Candidate[] {
   return out;
 }
 
-/** Step 11: a name already used by an earlier range gets the first free " 2", " 3" suffix; every name fits 64 characters. */
+/**
+ * Step 11: a name already used by an earlier range gets the first free " 2", " 3" suffix; every name fits 64 characters.
+ * Names are compared as the device keeps them (cut to `NAME_BYTES`), and a suffixed name fits `NAME_BYTES`, so the names stay unique when written.
+ */
 function uniqueNames(names: string[]): string[] {
   const taken = new Set<string>();
   return names.map((name) => {
     let out = cutChars(name, NAME_CHARS);
-    for (let k = 2; taken.has(out); k++) out = cutChars(name, NAME_CHARS - ` ${k}`.length) + ` ${k}`;
-    taken.add(out);
+    for (let k = 2; taken.has(cutBytes(out, NAME_BYTES)); k++) out = cutBytes(name, NAME_BYTES - ` ${k}`.length) + ` ${k}`;
+    taken.add(cutBytes(out, NAME_BYTES));
     return out;
   });
 }

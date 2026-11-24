@@ -67,9 +67,12 @@ export function validateRanges(strand: Strand, ranges: RangeView[], effectCount:
     if (r.start > at) return "ranges leave a gap";
     at = r.start + r.len;
     const name = typeof r.name === "string" ? r.name.trim() : "";
-    if (name.length < 1 || name.length > NAME_CHARS) return "a range name needs 1 to 64 characters";
-    if (!opts.sharedNames && names.has(name)) return "two ranges have the same name";
-    names.add(name);
+    const chars = [...name].length;
+    if (chars < 1 || chars > NAME_CHARS) return "a range name needs 1 to 64 characters";
+    // The device keeps the name cut to 32 bytes, so names must differ within that cut to read back.
+    const written = segmentName(name, "");
+    if (!opts.sharedNames && names.has(written)) return "two ranges have the same name";
+    names.add(written);
     const p = r.pattern;
     if (p.kind === "every") {
       const span = (p.n - 1) * p.group;
@@ -81,7 +84,7 @@ export function validateRanges(strand: Strand, ranges: RangeView[], effectCount:
     }
     const slots = p.kind === "every" ? p.n : 1;
     if (!Array.isArray(r.slots) || r.slots.length !== slots) return "a range has the wrong number of slots";
-    const current = opts.current?.find((c) => c.name.trim() === name);
+    const current = opts.current?.find((c) => c.start === r.start && c.name.trim() === name);
     for (const [k, s] of r.slots.entries()) {
       const reason = slotReason(s, effectCount, current?.slots[k]?.fx);
       if (reason) return reason;
@@ -99,7 +102,10 @@ type Plan = { creates: Body[]; removed: number[]; patches: SegPatch[]; paint: La
 const segOn = (slot: SlotView, next: StrandPatch): boolean => slot.on && next.on !== false;
 const tagOf = (r: RangeView, k: number): "" | "paint" | { k: number; n: number } =>
   r.pattern.kind === "every" ? { k: k + 1, n: r.pattern.n } : r.pattern.kind === "individual" ? "paint" : "";
-const sameColors = (a: number[][], b: number[][]): boolean => a.every((c, k) => c.length === b[k]?.length && c.every((v, j) => v === b[k]![j]));
+/** The slot's three colors; a color the slot leaves out is black, as on a new segment. */
+const colorsOf = (slot: SlotView): number[][] => [0, 1, 2].map((j) => [...(slot.col[j] ?? [0, 0, 0])]);
+/** Equal when every color's RGB part is equal; the white channel of an RGBW read-back is not compared. */
+const sameColors = (a: number[][], b: number[][]): boolean => a.every((c, k) => [0, 1, 2].every((j) => c[j] === b[k]?.[j]));
 const samePaint = (a: string[] | undefined, b: string[] | undefined): boolean =>
   a !== undefined && b !== undefined && a.length === b.length && a.every((c, k) => c.toUpperCase() === b[k]!.toUpperCase());
 
@@ -107,7 +113,8 @@ const samePaint = (a: string[] | undefined, b: string[] | undefined): boolean =>
 function diff(seg: WledSeg, slot: SlotView | undefined, on: boolean | undefined, bri: number | undefined): Body {
   const out: Body = {};
   if (slot) {
-    if (!sameColors(slot.col, seg.col)) out.col = slot.col.map((c) => [...c]);
+    const col = colorsOf(slot);
+    if (!sameColors(col, seg.col)) out.col = col;
     for (const k of SLOT_NUMBERS) if (slot[k] !== seg[k]) out[k] = slot[k];
     for (const k of SLOT_FLAGS) if (slot[k] !== seg[k]) out[k] = slot[k];
   }
@@ -127,7 +134,7 @@ function bodies(strand: Strand, r: RangeView, next: StrandPatch, bri: number): B
   const name = r.name.trim();
   const p = r.pattern;
   return r.slots.map((slot, k) => {
-    const col = [0, 1, 2].map((j) => [...(slot.col[j] ?? [0, 0, 0])]);
+    const col = colorsOf(slot);
     const geometry = p.kind === "every" ? { start: start + k * p.group, grp: p.group, spc: (p.n - 1) * p.group } : { start, grp: 1, spc: 0 };
     return {
       ...geometry,
@@ -169,7 +176,8 @@ function plan(state: WledState, strand: Strand, next: StrandPatch, lists: Lists,
 
   if (read.crossing.length > 0) {
     const r = ranges?.[0];
-    if (ranges && (ranges.length !== 1 || r!.pattern.kind !== "all" || r!.start !== 0 || r!.len !== strand.len)) {
+    const same = r !== undefined && r.pattern.kind === "all" && r.start === 0 && r.len === strand.len && r.name.trim() === read.view.ranges[0]!.name;
+    if (ranges && (ranges.length !== 1 || !same)) {
       throw new LayoutError("shared", messages.shared(strand.name));
     }
     const slot = r?.slots[0];
@@ -220,9 +228,12 @@ function plan(state: WledState, strand: Strand, next: StrandPatch, lists: Lists,
   return { creates, removed: read.inside.filter((id) => !kept.has(id)), patches, paint: painted };
 }
 
-/** Segments a write adds to the device: creates minus removes. */
-export function segmentsNeeded(state: WledState, strand: Strand, next: StrandPatch, lists: Lists, paint: PaintMap): number {
-  const p = plan(state, strand, next, lists, paint, {});
+/**
+ * Segments a write adds to the device: creates minus removes. It checks `next`
+ * as `writeStrand` does, so it throws `LayoutError` ("invalid_layout" or "shared") on a layout `writeStrand` refuses.
+ */
+export function segmentsNeeded(state: WledState, strand: Strand, next: StrandPatch, lists: Lists, paint: PaintMap, opts: { sharedNames?: boolean } = {}): number {
+  const p = plan(state, strand, next, lists, paint, opts);
   return p.creates.length - p.removed.length;
 }
 

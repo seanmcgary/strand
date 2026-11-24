@@ -4,7 +4,7 @@ import type { RangeView, SlotView, StrandPatch } from "../../shared/apiTypes";
 import { seeds } from "../../test/fixtures/seeds";
 import { applyPost, listState, simFromState, type SimState } from "../../test/wledSim";
 import { decodePaint, parseState, readLayout, readStrand, strandsFromConfig, type PaintMap, type Strand, type WledState } from "./layoutRead";
-import { LayoutError, validateRanges, writeStrand, type LayoutWrite, type SegPatch } from "./layoutWrite";
+import { LayoutError, segmentsNeeded, validateRanges, writeStrand, type LayoutWrite, type SegPatch } from "./layoutWrite";
 
 const lists = { effects: seeds.backyard.effects, palettes: seeds.backyard.palettes };
 const [o0, o1] = strandsFromConfig(seeds.backyard.cfg, [], {}).strands as [Strand, Strand];
@@ -193,11 +193,40 @@ describe("writeStrand", () => {
     expect(layoutError(() => write(deviceState(splitBackyard), [all("A", 0, 150, { fx: 200 })])).code).toBe("invalid_layout");
   });
 
+  // Fails if the unknown-effect exception looks up the current range by name alone, so a second range with that name borrows it.
+  it("keeps the unknown-effect exception on its own range when names repeat", () => {
+    const state = deviceState([
+      { id: 0, n: "A", start: 0, stop: 75, fx: 200 },
+      { id: 1, n: "B", start: 75, stop: 150 },
+    ]);
+    const next = [all("A", 0, 75, { fx: 200 }), all("A", 75, 75, { fx: 200 })];
+    expect(layoutError(() => writeStrand(state, o0, { ranges: next }, lists, {}, 32, { sharedNames: true })).code).toBe("invalid_layout");
+  });
+
+  // Fails if the color diff ignores device colors the slot leaves out, or counts an RGBW read-back as a change.
+  it("compares every color slot by its RGB part", () => {
+    const state = deviceState([{ id: 0, n: "A", start: 0, stop: 150, col: [[255, 0, 0], [0, 255, 0], [0, 0, 0]] }]);
+    expect(flat(write(state, [all("A", 0, 150, { col: [[255, 0, 0]] })]))).toEqual([{ id: 0, col: [[255, 0, 0], [0, 0, 0], [0, 0, 0]] }]);
+    const rgbw = { ...state, seg: [{ ...state.seg[0]!, col: [[255, 0, 0, 7], [0, 0, 0, 0], [0, 0, 0, 0]] }] };
+    expect(write(rgbw, [all("A", 0, 150, { col: [[255, 0, 0], [0, 0, 0], [0, 0, 0]] })]).seg).toEqual([]);
+  });
+
   // Fails if a shared strand accepts a layout change, or its slot edit does not reach the crossing segment.
   it("edits only the slot of a shared strand", () => {
     const state = deviceState([{ id: 0, start: 0, stop: 300 }]);
     expect(layoutError(() => write(state, [all("A", 0, 75), all("B", 75, 75)])).code).toBe("shared");
     expect(flat(write(state, [all("Range 1", 0, 150, { fx: 2 })]))).toEqual([expect.objectContaining({ id: 0, fx: 2 })]);
+  });
+
+  // Fails if a shared strand's one range can be renamed (the name has no segment of its own to live on).
+  it("refuses a rename on a shared strand", () => {
+    expect(layoutError(() => write(deviceState([{ id: 0, start: 0, stop: 300 }]), [all("Eaves", 0, 150)])).code).toBe("shared");
+  });
+
+  // Fails if segmentsNeeded ignores sharedNames and refuses the names a separate cut writes.
+  it("counts segments with the write's options", () => {
+    const next = { ranges: [all("A", 0, 75), all("A", 75, 75)] };
+    expect(segmentsNeeded(deviceState(splitBackyard), o0, next, lists, {}, { sharedNames: true })).toBe(1);
   });
 
   // Fails if segmentName is not used for tags (bytes over 32, a split code point, or a cut tag).
@@ -222,6 +251,8 @@ describe("validateRanges", () => {
     ["two ranges named A", [all("A", 0, 75), all("A", 75, 75)]],
     ["c3 32", [all("A", 0, 150, { c3: 32 })]],
     ["a 65-character name", [all("x".repeat(65), 0, 150)]],
+    ["a 65-emoji name", [all("🎄".repeat(65), 0, 150)]],
+    ["two names equal after the 32-byte cut", [all(`${"x".repeat(32)}1`, 0, 75), all(`${"x".repeat(32)}2`, 75, 75)]],
     ["paint of the wrong length", [{ name: "P", start: 0, len: 11, pattern: { kind: "individual" }, slots: [slot()], paint }, all("B", 11, 139)]],
     ["Every with a slot past the range end", [{ name: "E", start: 0, len: 2, pattern: { kind: "every", n: 3, group: 1 }, slots: [slot(), slot(), slot()] }, all("B", 2, 148)]],
   ])("refuses %s", (_, ranges) => {
@@ -233,6 +264,7 @@ describe("validateRanges", () => {
     const twoA = [all("A", 0, 75), all("A", 75, 75)];
     expect(validateRanges(o0, twoA, lists.effects.length, { sharedNames: true })).toBeNull();
     expect(validateRanges(o0, [all("A", 0, 75), all("B", 75, 75)], lists.effects.length)).toBeNull();
+    expect(validateRanges(o0, [all("🎄".repeat(64), 0, 150)], lists.effects.length)).toBeNull();
   });
 
   // Fails if readLayout can produce names that validateRanges refuses (finding F7).
@@ -243,6 +275,12 @@ describe("validateRanges", () => {
     ]);
     const view = readLayout(state, [o0, o1], lists, {}, 32).strands[0]!;
     expect(validateRanges(o0, view.ranges, lists.effects.length)).toBeNull();
+    const full = "x".repeat(32);
+    const cut = deviceState([
+      { id: 0, n: full, start: 0, stop: 50 },
+      { id: 1, n: full, start: 50, stop: 150 },
+    ]);
+    expect(validateRanges(o0, readLayout(cut, [o0, o1], lists, {}, 32).strands[0]!.ranges, lists.effects.length)).toBeNull();
   });
 });
 
