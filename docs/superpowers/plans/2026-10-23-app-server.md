@@ -8,7 +8,7 @@
 
 **Tech Stack:** Node 24, TypeScript, Fastify 5, `@fastify/static`, `node:sqlite`, `bonjour-service` 1.4.4, `multicast-dns` 7.2.5, vitest, Vite, React 19, Redux Toolkit + recompose, Tailwind v4, shadcn/ui.
 
-**Spec:** `docs/superpowers/specs/2026-10-23-app-server-design.md` (approved). The API contract comes from `docs/design/strand-wled-spec.html`, block "MOCK APP SERVER" (lines 574-937). Read both before you start a task.
+**Spec:** `docs/superpowers/specs/2026-10-23-app-server-design.md` (approved). The API contract comes from `docs/design/strand-wled-spec.html`, block "MOCK APP SERVER" (lines 576-1058), down to its "Lights and presets" list. Read both before you start a task. The Lights and Presets design (`docs/superpowers/specs/2026-11-23-lights-presets-design.md`) changes some rules of the spec. "Decisions" below lists what it changes in this plan. Its endpoints (the "Lights and presets" list and the block "MOCK APP SERVER: LIGHTS AND PRESETS") belong to a separate plan.
 
 ## Pipeline State
 
@@ -18,14 +18,23 @@
 | class     | large (new subsystem, new schema, new public API)            |
 | profile   | backend (the frontend part is a scaffold with no screens)    |
 | branch    | feat/app-server                                              |
-| pr        | n/a (no git remote: commit locally, no draft PR)             |
+| pr        | #1                                                           |
 | gate      | approved 2026-11-23                                          |
 | round     | 0                                                            |
-| decisions | 0                                                            |
+| decisions | 8                                                            |
 
 ### Decisions
 
-(none yet; the plan-time choices that change the spec are in "Plan decisions" below)
+The plan-time choices that change the spec are in "Plan decisions" below. These entries record changes to the approved plan.
+
+1. **Task 8, WLED presets endpoint.** The plan said: `settingsRoutes` serves `GET /api/devices/:id/presets` from `/presets.json`, with a test, and the file structure lists "presets" in `routes/settings.ts`. It says now: there is no presets endpoint. Why: Lights and Presets design, docs/superpowers/specs/2026-11-23-lights-presets-design.md §3, §9.
+2. **Task 8, `Preset` type.** The plan said: Task 8 consumes `Preset` (Task 2 added it to `shared/apiTypes.ts`). It says now: Task 8 removes `Preset` from `shared/apiTypes.ts`, because no endpoint returns it. Why: Lights and Presets design, docs/superpowers/specs/2026-11-23-lights-presets-design.md §3, §9.
+3. **Task 8, config read `def`.** The plan said: `GET config` returns `def` as the device has it, with the boot preset `ps`. It says now: `GET config` returns `def` = `{ on, bri }`, and `WledConfig.def` has no `ps` (the test seeds keep `def.ps`). Strand always sets its startup preset as the boot preset, so Settings has no boot preset field. Why: Lights and Presets design, docs/superpowers/specs/2026-11-23-lights-presets-design.md §6.7.
+4. **Task 9, config write `def`.** The plan said: the config write accepts any keys inside `def`. It says now: a `def` key other than `on` and `bri` gets `400 invalid_request`, and the device gets no `POST`. Settings writes only `def.on` and `def.bri`. Why: Lights and Presets design, docs/superpowers/specs/2026-11-23-lights-presets-design.md §6.7.
+5. **Task 10, `PATCH state`.** The plan said: the server passes any JSON object through, except one with `pin` or `rb`. It says now: the body is only `{ on?, bri? }` (`StatePatch` in `shared/apiTypes.ts`). The handler checks it and rejects anything else with `400 invalid_request`. Why: Lights and Presets design, docs/superpowers/specs/2026-11-23-lights-presets-design.md §4, §9.
+6. **Task 11, browser API client.** The plan said: `api` has every function of the mock `api` object, with `getPresets`, and `patchState` takes a WLED state object. It says now: no `getPresets`; `patchState(id, patch: StatePatch)`; the Lights, scene and look functions belong to a separate plan. The browser never sends WLED JSON. Why: Lights and Presets design, docs/superpowers/specs/2026-11-23-lights-presets-design.md §2 (decision 11), §9.
+7. **Global Constraints.** The plan said: do not store presets in the database, and keep nothing in memory between requests. It says now: do not store live lighting state, effects, palettes or segments in the database; this plan adds no timer (the flash and startup-write timers belong to a separate plan); the browser never sends WLED JSON. Why: Lights and Presets design, docs/superpowers/specs/2026-11-23-lights-presets-design.md §4.
+8. **Spec line, mock block.** The plan said: the contract is the block "MOCK APP SERVER" (lines 574-937). It says now: lines 576-1058, down to the "Lights and presets" list; the Lights and Presets endpoints belong to a separate plan. Why: Lights and Presets design, docs/superpowers/specs/2026-11-23-lights-presets-design.md §9, §10.
 
 ## Plan decisions
 
@@ -50,8 +59,9 @@ The plan makes these choices. The spec does not make them, or the plan changes w
 Binding rules this change can touch (see `CLAUDE.md`, and the `CONVENTIONS.md` that Task 1 writes from the template's root and frontend conventions):
 
 - The browser talks only to the app server. No frontend code calls a WLED device (CLAUDE.md, "Architecture constraints").
-- Do not store lighting state, effects, palettes, segments or presets in the database (CLAUDE.md).
-- No in-memory device state, connection, or queue between requests (spec §3, §4 anti-goals).
+- Do not store live lighting state, effects, palettes or segments in the database (CLAUDE.md). Scenes, looks and strand groups come with the Lights and Presets plan.
+- No in-memory device state, connection, or queue between requests (spec §3, §4 anti-goals). This plan adds no timer. The flash and startup-write timers belong to the Lights and Presets plan.
+- The browser never builds or sends WLED JSON. `PATCH state` accepts only `{ on?, bri? }` (CLAUDE.md).
 - Settings writes use only `POST /json/cfg` and `POST /json/state`. No `/settings/<page>` form POSTs (spec §3).
 - No `NODE_ENV` branch anywhere (template CONVENTIONS, "the no-`NODE_ENV` rule").
 - React hooks only in `src/lib/withRouter.tsx`. Enforced by `eslint.config.js`.
@@ -156,7 +166,7 @@ server/
   mdns.ts                     browseWled, resolveA (real implementations)
   routes/devices.ts           list, probe, add, delete
   routes/discovery.ts         discovery
-  routes/settings.ts          info, config, unlock, capabilities, pins, scan, presets, reboot, pending-reboot
+  routes/settings.ts          info, config, unlock, capabilities, pins, scan, reboot, pending-reboot
   routes/control.ts           state, effects, palettes
   routes/preferences.ts       preferences
 test/
@@ -450,15 +460,15 @@ review: yes (the parser reads text from the device)
 
 **Files:**
 - Create: `server/wled/capabilities.ts`, `server/routes/settings.ts`
-- Modify: `server/app.ts` (register `settingsRoutes`)
+- Modify: `server/app.ts` (register `settingsRoutes`), `shared/apiTypes.ts` (remove `Preset`; `WledConfig.def` becomes `{ on: boolean; bri: number }`), `test/fixtures/seeds.ts` (the seed config type keeps `def.ps`, because the device has it)
 - Test: `server/wled/capabilities.test.ts`, `server/routes/settings.test.ts`
 
 **Interfaces:**
-- Consumes: `deviceRequest`, `makeTestApp`, `startFakeWled`, `seeds`, the `sjs*.txt` fixtures (Task 4); `targetOf`, `lockCheck` (Task 6); `devices`, `DeviceRow` (Task 3); `ApiError`, `messages`, `Capabilities`, `PinInfo`, `WledInfo`, `WledConfig`, `WledConfigFull`, `Preset`, `WifiNetwork` (Task 2).
+- Consumes: `deviceRequest`, `makeTestApp`, `startFakeWled`, `seeds`, the `sjs*.txt` fixtures (Task 4); `targetOf`, `lockCheck` (Task 6); `devices`, `DeviceRow` (Task 3); `ApiError`, `messages`, `Capabilities`, `PinInfo`, `WledInfo`, `WledConfig`, `WledConfigFull`, `WifiNetwork` (Task 2).
 - Produces:
   - `parseCapabilities(text: string): (Capabilities & { maxGpio: number }) | null`.
   - `pinsFromCapabilities(caps: Capabilities & { maxGpio: number }, cfg: WledConfigFull): PinInfo[]`. GPIOs `0` to `maxGpio - 1`, without `reservedPins`. `c` has 0x20 for `inputOnlyPins`. `a: true, n: "LEDs"` for each pin in `hw.led.ins[].pin`, and `n: "Button"`, `"IR"`, `"Relay"` for `hw.btn.ins[].pin`, `hw.ir.pin`, `hw.relay.pin` when they are 0 or more.
-  - `settingsRoutes(app, deps)` with the read endpoints: `GET info`, `GET config`, `GET capabilities`, `GET pins`, `POST networks/scan`, `GET presets`. Task 9 adds the write endpoints to the same file.
+  - `settingsRoutes(app, deps)` with the read endpoints: `GET info`, `GET config`, `GET capabilities`, `GET pins`, `POST networks/scan`. There is no `GET presets` (Decision 1). Task 9 adds the write endpoints to the same file.
   - `loadDevice(deps: AppDeps, id: string): DeviceRow`. It throws `404 not_found`.
   - `readInfo(deps: AppDeps, row: DeviceRow): Promise<WledInfo>`. It sends `GET /json/info` and calls `devices.recordSeen` (spec §7).
 
@@ -470,13 +480,13 @@ review: yes (the parser reads text from the device)
   - `pinsFromCapabilities` with the Backyard config → GPIO 16 and 17 are `a: true, n: "LEDs"`, GPIO 6 is absent, GPIO 34 has `c & 0x20`.
   - `GET capabilities` on a locked fake → `401 pin_required`. On a fake with `sjs: sjsUnsupported` → `502 device_error`, and the message says the firmware version is not supported.
   - `GET pins` on a v17 fake → the fake's `pins`. On a v0.15 fake → the list from `pinsFromCapabilities`. On a locked v0.15 fake → `401 pin_required`.
-  - `GET config` returns only the keys `id, nw, ap, def, light, hw, if`, with `hw` = `{ led }` and `if` = `{ sync }`.
+  - `GET config` returns only the keys `id, nw, ap, def, light, hw, if`, with `def` = `{ on, bri }` (no `ps`), `hw` = `{ led }` and `if` = `{ sync }`.
   - `GET info` returns `WledInfo` and updates `last_seen`.
-  - `GET presets` from `{"0":{},"1":{"n":"Warm White"},"3":{},"2":{"n":"Christmas"}}` → `[{id:1,name:"Warm White"},{id:2,name:"Christmas"}]`.
+  - `GET /api/devices/:id/presets` → `404 not_found` (the `/api` 404).
   - `POST networks/scan`: the fake returns `[]` two times, then the seed's `networks` → the five networks. With `scanEmptyCalls: 99` → `{ networks: [] }` after 10 requests.
   - Each endpoint for an unknown `:id` → `404 not_found`. For an offline device → `504 device_offline`.
 - [ ] **Step 2: Run.** Expected: FAIL.
-- [ ] **Step 3: Implement** by spec §8.3 and "Verified external API". The parser does not run the text. The scan waits `deps.scanDelayMs` between requests.
+- [ ] **Step 3: Implement** by spec §8.3 and "Verified external API". The parser does not run the text. The scan waits `deps.scanDelayMs` between requests. Remove `Preset` from `shared/apiTypes.ts`, and `ps` from `WledConfig.def` (Decisions 2 and 3). In `test/fixtures/seeds.ts`, change the type of `Seed.config` to `WledConfig & { def: WledConfig["def"] & { ps: number } }`, so the fake's `/json/cfg` still has `def.ps`.
 - [ ] **Step 4: Gate.** `pnpm exec tsc --noEmit && pnpm lint && pnpm test server/wled/capabilities.test.ts server/routes/settings.test.ts`. Expected: PASS.
 - [ ] **Step 5: Commit.** `feat(server): add settings read endpoints and capabilities parser`
 
@@ -515,12 +525,13 @@ review: yes (writes device configuration; data integrity)
   - Review Focus 5: a locked fake → `401 pin_required`, no `rb` request, and `pending_reboot` does not change. The same for a fake in `"timeout"` → `504`.
   - The write succeeds but the re-read times out (`fake.failNext("timeout", { method: "GET", path: "/json/cfg", skip: 1 })`) → `504 device_offline`, and no `rb` request.
   - A shorter `nw.ins` → `422 unsupported_change`, and the fake gets no `POST`.
-  - A body `{ ota: { lock: false } }`, `[]`, or `{ hw: 5 }` → `400 invalid_request`, and the fake gets no `POST`.
+  - A body `{ ota: { lock: false } }`, `[]`, `{ hw: 5 }`, `{ def: { ps: 250 } }`, or `{ def: { on: true, ps: 1 } }` → `400 invalid_request`, and the fake gets no `POST`.
+  - `PATCH config { def: { bri: 200 } }` → the `POST /json/cfg` body has the full `def`, with the device's current `ps` unchanged.
   - `POST unlock { pin: "1234" }` on a locked fake → 204, then `PATCH config` succeeds. `{ pin: "0000" }` → `401 wrong_pin`. On a fake with no PIN → 204. `{}`, `{ pin: "12" }`, `{ pin: 1234 }` → `400 invalid_request`.
   - `POST reboot` → 204, the fake got `{"rb":true}`, and `pending_reboot` is cleared.
 - [ ] **Step 3: Run.** Expected: FAIL.
 - [ ] **Step 4: Implement** by spec §8.3 "Config write", "Pending reboot", "Unlock" and "Reboot".
-  - Check the body first: a plain object whose keys are all in `CONFIG_KEYS` and whose values are plain objects. Otherwise, `400 invalid_request`.
+  - Check the body first: a plain object whose keys are all in `CONFIG_KEYS` and whose values are plain objects, and a `def` (if present) whose keys are only `on` and `bri` (Decision 4). Otherwise, `400 invalid_request`.
   - If the re-read in step 6 fails, return that device error and send no reboot.
   - If the reboot in step 8 fails, return 200 with the config, and add `"Wi-Fi"` to `pending_reboot`.
   - The device "started after `pending_since`" when `deps.now() - info.uptime * 1000 > pending_since`. `GET pending-reboot` reads info through `readInfo`.
@@ -534,21 +545,23 @@ review: no
 
 **Files:**
 - Create: `server/routes/control.ts`, `server/routes/preferences.ts`
-- Modify: `server/app.ts` (register both)
+- Modify: `server/app.ts` (register both), `shared/apiTypes.ts` (add `StatePatch`)
 - Test: `server/routes/control.test.ts`, `server/routes/preferences.test.ts`
 
 **Interfaces:**
 - Consumes: `loadDevice` (Task 8); `targetOf` (Task 6); `deviceRequest`, `makeTestApp`, `startFakeWled`, `seeds` (Task 4); `preferences` (Task 3); `ApiError`, `messages`, `Effect`, `Palette` (Task 2).
-- Produces: `controlRoutes(app, deps)` (`GET state`, `PATCH state`, `GET effects`, `GET palettes`); `preferencesRoutes(app, deps)` (`GET /api/preferences`, `PUT /api/preferences/:key`).
+- Produces: `controlRoutes(app, deps)` (`GET state`, `PATCH state`, `GET effects`, `GET palettes`); `preferencesRoutes(app, deps)` (`GET /api/preferences`, `PUT /api/preferences/:key`); `StatePatch = { on?: boolean; bri?: number }` in `shared/apiTypes.ts` (Decision 5).
 
 - [ ] **Step 1: Write the failing tests.**
   - `PATCH state { on: false }` → the fake got exactly `{ on: false, v: true }`. The response is the fake's full state.
-  - `PATCH state { pin: "1234" }` and `{ rb: true }` → `400 invalid_request`. `PATCH state [1]` → `400`.
+  - `PATCH state { bri: 128 }` → the fake got exactly `{ bri: 128, v: true }`.
+  - `PATCH state` with `{}`, `{ pin: "1234" }`, `{ rb: true }`, `{ ps: 1 }`, `{ seg: [{ id: 0, on: false }] }`, `{ on: false, tt: 0 }`, `{ on: "false" }`, `{ bri: 256 }`, `{ bri: 1.5 }` or `[1]` → `400 invalid_request`, and the fake gets no `POST`.
   - `GET effects` with names `["Solid","RSVD","Blink"]` and fxdata `["","","!,;!;"]` → `[{id:0,name:"Solid",meta:""},{id:2,name:"Blink",meta:"!,;!;"}]`.
   - `GET palettes` → `{ id, name }[]` by index.
   - `PUT /api/preferences/fav { value: ["Chase"] }` → 204, then `GET` → `{ fav: ["Chase"] }`. Key `"a b"` → 400. A value over 64 KB → 400. A 257th new key → 400. A `PUT` on an existing key when there are 256 keys → 204.
 - [ ] **Step 2: Run.** Expected: FAIL.
 - [ ] **Step 3: Implement** by spec §8.4 and §8.5. `PUT /api/preferences/:key` uses `bodyLimit: 71680`.
+  - Check the `PATCH state` body in the handler: a plain object with at least one key, each key `on` or `bri`, `on` a boolean, `bri` an integer from 0 to 255. Otherwise, `400 invalid_request`. A Fastify body schema alone is not enough: Fastify's default Ajv options (`removeAdditional`, `coerceTypes`) drop unknown keys and convert `"false"` to `false` instead of rejecting them.
 - [ ] **Step 4: Gate.** `pnpm exec tsc --noEmit && pnpm lint && pnpm test server/routes/control.test.ts server/routes/preferences.test.ts`. Expected: PASS.
 - [ ] **Step 5: Commit.** `feat(server): add light control and preferences endpoints`
 
@@ -562,9 +575,9 @@ review: no
 - Test: `src/api/client.test.ts`, `src/store/createApiThunk.test.ts`, `src/store/slices/devices.test.ts`
 
 **Interfaces:**
-- Consumes: `shared/apiTypes.ts` (Task 2); `createApiThunk`, `makeStore` (Task 1).
+- Consumes: `shared/apiTypes.ts` (Task 2; `StatePatch` from Task 10); `createApiThunk`, `makeStore` (Task 1).
 - Produces:
-  - `export const api` with the functions of the design's mock `api` object, with the same names: `listDevices`, `discover`, `probeHost`, `addDevice`, `removeDevice`, `getInfo`, `getState`, `patchState`, `getConfig`, `patchConfig`, `unlock`, `getCapabilities`, `getPins`, `scanNetworks`, `getPresets`, `reboot`. Also `getPendingReboot`, `getEffects`, `getPalettes`, `getPreferences`, `putPreference`.
+  - `export const api` with the functions of the design's mock `api` object, with the same names: `listDevices`, `discover`, `probeHost`, `addDevice`, `removeDevice`, `getInfo`, `getState`, `patchState`, `getConfig`, `patchConfig`, `unlock`, `getCapabilities`, `getPins`, `scanNetworks`, `reboot`. Also `getPendingReboot`, `getEffects`, `getPalettes`, `getPreferences`, `putPreference`. There is no `getPresets`. `patchState(id: string, patch: StatePatch)` sends only `on` and `bri`. The mock's Lights, scene and look functions belong to a separate plan (Decision 6).
   - `export class ApiError extends Error { status: number; code: ErrorCode }`. It is the only `ApiError` in `src/`.
   - `devicesSlice` (`{ list: Device[]; status: "idle" | "loading" | "ok" | "error" }`) and the `fetchDevices` thunk (through `createApiThunk`) that fills `list`.
 
