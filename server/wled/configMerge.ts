@@ -36,12 +36,30 @@ export function mergeConfigPatch(current: WledConfigFull, patch: ConfigPatch): W
   return merge(current, patch) as WledConfigFull;
 }
 
-/** For each top-level key of `patch`, the complete merged subtree (spec §8.3 step 4). */
+/**
+ * For each top-level key of `patch`, the complete merged subtree (spec §8.3 step 4), with two rules from `deserializeConfig`:
+ * `hw.led.ins` is left out unless the request sets it (it re-initialises the buses), and `hw.led.rgbwm`,
+ * `hw.led.fps` and `light.gc.{bri,col,val}` are always sent, because the firmware resets them when a write omits them (`cfg.cpp:183`, `:189`, `:531-532`).
+ */
 export function topLevelBody(merged: WledConfigFull, patch: ConfigPatch): WledConfigFull {
   const body: Json = {};
   for (const key of Object.keys(patch)) {
     if (UNSAFE_KEYS.has(key)) continue;
-    body[key] = merged[key];
+    body[key] = structuredClone(merged[key]);
+  }
+  const led = sub(sub(merged.hw).led);
+  const carriedLed: Json = {};
+  for (const key of ["rgbwm", "fps"]) if (led[key] !== undefined) carriedLed[key] = led[key];
+  const gc = sub(sub(merged.light).gc);
+  const carriedGc: Json = {};
+  for (const key of ["bri", "col", "val"]) if (gc[key] !== undefined) carriedGc[key] = gc[key];
+
+  if (patch.hw === undefined && Object.keys(carriedLed).length > 0) body.hw = { led: carriedLed };
+  if (patch.light === undefined && Object.keys(carriedGc).length > 0) body.light = { gc: carriedGc };
+
+  if (patch.hw !== undefined && patch.hw.led?.ins === undefined) {
+    const hw = sub(body.hw);
+    body.hw = { ...hw, led: Object.fromEntries(Object.entries(sub(hw.led)).filter(([k]) => k !== "ins")) };
   }
   return body;
 }

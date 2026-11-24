@@ -66,13 +66,16 @@ export function toDevice(row: DeviceRow, live: { online: boolean; locked: boolea
   };
 }
 
-/** Whether the device's settings are PIN-locked. Any other failure counts as not locked. */
-export async function lockCheck(deps: AppDeps, target: DeviceTarget, recover = true): Promise<boolean> {
+/** Whether the device's settings are PIN-locked. Any other failure counts as not locked, unless `strict`, which passes it on. */
+export async function lockCheck(deps: AppDeps, target: DeviceTarget, recover = true, strict = false): Promise<boolean> {
   try {
     await deviceRequest<string>(deps, target, LOCK_CHECK_PATH, { parse: "text", recover });
     return false;
   } catch (err) {
-    if (err instanceof ApiError) return err.code === "pin_required";
+    if (err instanceof ApiError) {
+      if (strict && err.code !== "pin_required") throw err;
+      return err.code === "pin_required";
+    }
     throw err;
   }
 }

@@ -30,7 +30,25 @@ describe("topLevelBody", () => {
     const patch = patchOf({ hw: { led: { maxpwr: 850 } } });
     const body = topLevelBody(mergeConfigPatch(base(), patch), patch) as { hw: Record<string, unknown> };
     expect(Object.keys(body)).toEqual(["hw"]);
-    expect(body.hw).toEqual({ ...(base().hw as object), led: { ...(base().hw as { led: object }).led, maxpwr: 850 } });
+    const hw = base().hw as { led: { ins: unknown } };
+    const { ins: _ins, ...led } = hw.led;
+    expect(body.hw).toEqual({ ...hw, led: { ...led, maxpwr: 850 } });
+  });
+});
+
+describe("topLevelBody carried keys", () => {
+  // Fails if rgbwm, fps or gc are dropped from a write that touches neither hw nor light.
+  it("adds the reset-on-missing keys from the merged config", () => {
+    const cur = base();
+    (cur.hw as { led: Record<string, unknown> }).led.rgbwm = 3;
+    (cur.hw as { led: Record<string, unknown> }).led.fps = 60;
+    cur.light = { "scale-bri": 100, gc: { bri: 2.2, col: 1.5, val: 2.8 } };
+    const patch = patchOf({ id: { mdns: "porch" } });
+    expect(topLevelBody(mergeConfigPatch(cur, patch), patch)).toEqual({
+      id: { name: "Backyard", mdns: "porch" },
+      hw: { led: { rgbwm: 3, fps: 60 } },
+      light: { gc: { bri: 2.2, col: 1.5, val: 2.8 } },
+    });
   });
 });
 
@@ -70,6 +88,22 @@ describe("checkUnsupported", () => {
 describe("classifyChanges", () => {
   const classify = (patch: object, after: WledConfigFull = mergeConfigPatch(base(), patchOf(patch))) =>
     classifyChanges(base(), after, patchOf(patch));
+
+  // Fails if a gw-only change is missed.
+  it("flags a gateway-only change as a static IP reboot", () => {
+    const cur = base();
+    (cur.nw as { ins: Record<string, unknown>[] }).ins[0]!.ip = [192, 168, 1, 50];
+    const patch = patchOf({ nw: { ins: [entry("HomeNet", { ip: [192, 168, 1, 50], gw: [192, 168, 1, 1] }), entry("Guest")] } });
+    expect(classifyChanges(cur, mergeConfigPatch(cur, patch), patch).reboot).toEqual(["static IP"]);
+  });
+
+  // Fails if going back to DHCP (zeros) is not a change.
+  it("flags static IP back to DHCP as a static IP reboot", () => {
+    const cur = base();
+    (cur.nw as { ins: Record<string, unknown>[] }).ins[0]!.ip = [192, 168, 1, 50];
+    const patch = patchOf({ nw: { ins: [entry("HomeNet"), entry("Guest")] } });
+    expect(classifyChanges(cur, mergeConfigPatch(cur, patch), patch).reboot).toEqual(["static IP"]);
+  });
 
   // Fails if a changed SSID list is not a reconnect change.
   it("flags a new SSID as reconnect", () => {

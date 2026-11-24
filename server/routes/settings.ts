@@ -76,14 +76,21 @@ async function readCapabilities(deps: AppDeps, row: DeviceRow): Promise<Capabili
 
 const configBody = {
   type: "object",
+  minProperties: 1,
   additionalProperties: false,
   properties: Object.fromEntries(
     CONFIG_KEYS.map((key) => [
       key,
       // Settings writes only `def.on` and `def.bri`; the boot preset belongs to Strand (plan decision 4).
       key === "def"
-        ? { type: "object", additionalProperties: false, properties: { on: {}, bri: {} } }
-        : { type: "object" },
+        ? {
+            type: "object",
+            additionalProperties: false,
+            properties: { on: { type: "boolean" }, bri: { type: "integer", minimum: 0, maximum: 255 } },
+          }
+        : key === "nw"
+          ? { type: "object", properties: { ins: { type: "array", items: { type: "object" } } } }
+          : { type: "object" },
     ]),
   ),
 } as const;
@@ -175,7 +182,7 @@ export async function settingsRoutes(app: FastifyInstance, deps: AppDeps): Promi
     async (request, reply) => {
       const target = targetOf(loadDevice(deps, request.params.id));
       await deviceRequest(deps, target, "/json/state", { method: "POST", body: { pin: request.body.pin } });
-      if (await lockCheck(deps, target)) throw new ApiError(401, "wrong_pin", messages.wrongPin());
+      if (await lockCheck(deps, target, true, true)) throw new ApiError(401, "wrong_pin", messages.wrongPin());
       return reply.code(204).send();
     },
   );
@@ -194,7 +201,7 @@ export async function settingsRoutes(app: FastifyInstance, deps: AppDeps): Promi
     try {
       info = await readInfo(deps, row);
     } catch (err) {
-      if (err instanceof ApiError && err.code === "device_offline") return row.pendingReboot;
+      if (err instanceof ApiError && (err.code === "device_offline" || err.code === "device_busy")) return row.pendingReboot;
       throw err;
     }
     const since = row.pendingSince === null ? NaN : Date.parse(row.pendingSince);
