@@ -23,6 +23,7 @@ beforeAll(() => {
     now: () => new Date(),
     wledPort: 80,
     scanDelayMs: 1,
+    logger: false,
   });
 });
 

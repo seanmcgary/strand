@@ -3,7 +3,7 @@ import { useLocation, useNavigate, useNavigationType, useParams } from "react-ro
 import type { Location, NavigateFunction, NavigationType, Params } from "react-router-dom"
 
 /**
- * THE ONLY file in web/src allowed to import a React hook.
+ * The only file in src/ allowed to import a React hook.
  *
  * Every other component gets router access via this HOC instead of calling
  * `useLocation`/`useNavigate`/`useParams`/`useNavigationType` directly (see
@@ -34,11 +34,8 @@ export function withRouter<P extends RouterProps>(
  * buttons AND for the very first document load (react-router seeds the history
  * action as `Pop` under `createBrowserRouter`).
  *
- * Deliberately a SEPARATE HOC rather than a fourth key on `RouterProps`: every
- * screen in the app spreads `RouterProps` into its own props interface, and a
- * dozen stories/tests hand-build those props as object literals, so a new
- * required key there would be a repo-wide churn for the benefit of one
- * consumer.
+ * A separate HOC rather than a key on `RouterProps`, so that screens, stories
+ * and tests that build `RouterProps` by hand do not need it.
  */
 export interface NavigationTypeProps {
   navigationType: NavigationType

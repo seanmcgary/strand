@@ -10,17 +10,17 @@ import { withNavigationType, withRouter, type NavigationTypeProps, type RouterPr
  * `<main>` only on a client-side arrival, never on the first document load.
  */
 const SKIP_LINK =
-  "sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-3 focus:z-[60] focus:rounded-control focus:bg-brand focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-white"
+  "sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-3 focus:z-[60] focus:rounded-control focus:bg-primary focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-primary-foreground"
 
-const RING = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2"
-const RING_ON_PAGE = `${RING} focus-visible:ring-offset-stone-50`
+const RING = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+const RING_ON_PAGE = `${RING} focus-visible:ring-offset-background`
 
 interface NotFoundViewProps extends RouterProps, NavigationTypeProps {}
 
 export function NotFoundScreenView(props: NotFoundViewProps) {
   const requestedPath = props.location.pathname
   return (
-    <div className="flex min-h-screen flex-col bg-stone-50 text-stone-900">
+    <div className="flex min-h-screen flex-col bg-background text-foreground">
       <a href="#main" className={`${SKIP_LINK} ${RING_ON_PAGE}`}>
         Skip to content
       </a>
@@ -29,25 +29,25 @@ export function NotFoundScreenView(props: NotFoundViewProps) {
         tabIndex={-1}
         className="mx-auto flex w-full max-w-[640px] flex-1 flex-col items-start justify-center gap-4 px-6 focus:outline-none"
       >
-        <div className="inline-flex items-center gap-2 rounded-full border border-stone-200 bg-white px-3.5 py-1.5">
-          <span className="size-[7px] rounded-full bg-brand" aria-hidden="true" />
-          <span className="font-mono text-[11.5px] font-semibold tracking-[0.06em] text-stone-700">
+        <div className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-3.5 py-1.5">
+          <span className="size-[7px] rounded-full bg-primary" aria-hidden="true" />
+          <span className="font-mono text-[11.5px] font-semibold tracking-[0.06em] text-muted-foreground">
             ERROR 404 · PAGE NOT FOUND
           </span>
         </div>
         <h1 className="text-balance text-[clamp(32px,6.6vw,52px)] font-extrabold leading-[1.03] tracking-[-0.035em]">
           We couldn&apos;t find that page.
         </h1>
-        <p className="max-w-[460px] text-pretty leading-[1.55] text-stone-600">
+        <p className="max-w-[460px] text-pretty leading-[1.55] text-muted-foreground">
           The address may be mistyped, or the page may have moved.
         </p>
-        <div className="max-w-full overflow-hidden rounded-control border border-stone-200 bg-white px-3.5 py-2.5">
-          <span className="font-mono text-[12px] text-stone-500">{requestedPath}</span>
+        <div className="max-w-full overflow-hidden rounded-control border border-border bg-card px-3.5 py-2.5">
+          <span className="font-mono text-[12px] text-muted-foreground">{requestedPath}</span>
         </div>
         <div className="flex flex-wrap gap-3">
           <Link
             to="/"
-            className={`inline-flex min-h-11 items-center rounded-[11px] bg-brand px-[22px] py-3 text-[15px] font-semibold text-white hover:bg-brand-dark ${RING_ON_PAGE}`}
+            className={`inline-flex min-h-11 items-center rounded-[11px] bg-primary px-[22px] py-3 text-[15px] font-semibold text-primary-foreground hover:bg-primary/90 ${RING_ON_PAGE}`}
           >
             Back home
           </Link>

@@ -37,7 +37,7 @@ One TypeScript package copied from the frontend of `~/Code/app-template`: React 
 - The database is a `devices` table (`id`, `mac`, `name`, `host`, `port`, `last_ip`, `last_seen`, `pending_reboot`, `pending_since`, `created_at`, `updated_at`) and a `preferences` table (`key`, `value`, `updated_at`). See spec §7.
 - Device discovery uses mDNS plus previously known devices, with manual host/IP entry as a fallback.
 - The app does no remote networking or auth. Remote access is the user's reverse proxy or Tailscale, so the app must work behind a proxy (no hard-coded origins or absolute URLs).
-- `/api` accepts only requests whose `Host` is an IP address, `localhost`, a `.local` name, or a name in `ALLOWED_HOSTS` (comma-separated; `*` turns the check off). Writes also need the header `X-Strand-Request: 1` and a same-origin `Origin`. A user who serves Strand behind a reverse proxy with its own host name must add that name to `ALLOWED_HOSTS` (`server/requestGuard.ts`).
+- `/api` accepts only requests whose `Host` is an IP address, `localhost`, a `.local` name, or a name in `ALLOWED_HOSTS` (comma-separated; `*` turns the check off). Writes also need the header `X-Strand-Request: 1` and a same-origin `Origin`. A user who serves Strand behind a reverse proxy with its own host name must add that name to `ALLOWED_HOSTS` (`server/requestGuard.ts`). The proxy must also forward the original `Host` header (nginx: `proxy_set_header Host $host;`), or every write fails the Origin check.
 - Settings coverage is intentionally partial (LED hardware, network, sync, system). Anything else goes through an "Open WLED Advanced UI" link to the device's stock config page.
 
 ## Scope

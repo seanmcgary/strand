@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyServerOptions } from "fastify";
 import fastifyStatic from "@fastify/static";
 import type { Config } from "./config";
 import { isApiRequest, registerRequestGuard } from "./requestGuard";
@@ -18,6 +18,12 @@ export interface AppDeps {
   wledPort: number;
   /** The wait between starting a Wi-Fi scan and reading it: 1000 in production. */
   scanDelayMs: number;
+  /**
+   * Fastify's logger option. Defaults to request logs on stdout. Tests pass
+   * `false`, or `{ stream }` to read the log back. The request serializer is
+   * always applied.
+   */
+  logger?: FastifyServerOptions["logger"];
 }
 
 /**
@@ -28,7 +34,10 @@ export interface AppDeps {
 export function buildApp(deps: AppDeps): FastifyInstance {
   const { config } = deps;
   const app = Fastify({
-    logger: { serializers: { req: serializeRequestForLog } },
+    logger:
+      deps.logger === false
+        ? false
+        : { ...(typeof deps.logger === "object" ? deps.logger : {}), serializers: { req: serializeRequestForLog } },
     bodyLimit: 32768,
   });
 

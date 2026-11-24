@@ -30,15 +30,14 @@ export default defineConfig([
     },
     rules: {
       // `withRouter`/`connect`/`compose` (recompose HOC chains, e.g.
-      // `export default compose(...)(View)` on connected pages) wrap screen
-      // and guard exports; treat them as component exports for react-refresh.
+      // `export default compose(...)(View)`) wrap screen exports; treat them
+      // as component exports for react-refresh.
       'react-refresh/only-export-components': [
         'error',
         { allowConstantExport: true, extraHOCs: ['withRouter', 'connect', 'compose'] },
       ],
-      // `_`-prefixed destructured/unused vars are an intentional "explicitly
-      // discarded" marker (e.g. stripping a header before forwarding a
-      // request) — never flag them as unused.
+      // `_`-prefixed unused vars and args mark a value as deliberately
+      // discarded; never flag them as unused.
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
       'no-restricted-syntax': [
         'error',

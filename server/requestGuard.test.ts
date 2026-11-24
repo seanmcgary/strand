@@ -1,3 +1,4 @@
+import { connect, type AddressInfo } from "node:net";
 import Fastify from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadConfig, type Config } from "./config";
@@ -20,8 +21,8 @@ afterEach(async () => {
 });
 
 describe("registerRequestGuard: Host", () => {
-  // Fails if IP addresses, localhost or .local names stop being allowed by default.
-  it.each(["192.168.1.10:3000", "localhost:3000", "strand.local"])("allows %s", async (host) => {
+  // Fails if IP addresses (v4 and bracketed v6), localhost or .local names stop being allowed by default.
+  it.each(["192.168.1.10:3000", "[::1]:3000", "localhost:3000", "strand.local"])("allows %s", async (host) => {
     const res = await guarded().inject({ method: "GET", url: "/api/x", headers: { host } });
     expect(res.statusCode).toBe(200);
   });
@@ -31,6 +32,22 @@ describe("registerRequestGuard: Host", () => {
     const res = await guarded().inject({ method: "GET", url: "/api/x", headers: { host: "evil.example.com" } });
     expect(res.statusCode).toBe(403);
     expect(res.json()).toMatchObject({ error: "invalid_request" });
+  });
+
+  // Fails if a request with no Host header is let through instead of rejected.
+  it("rejects a missing host", async () => {
+    // inject() always fills in a Host, so send a raw HTTP/1.0 request, which may omit it.
+    const app = guarded();
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const { port } = app.server.address() as AddressInfo;
+    const reply = await new Promise<string>((resolve, reject) => {
+      let data = "";
+      const socket = connect(port, "127.0.0.1", () => socket.end("GET /api/x HTTP/1.0\r\n\r\n"));
+      socket.on("data", (chunk) => (data += chunk));
+      socket.on("end", () => resolve(data));
+      socket.on("error", reject);
+    });
+    expect(reply.split("\r\n")[0]).toMatch(/^HTTP\/1\.[01] 403 /);
   });
 
   // Fails if ALLOWED_HOSTS names are not consulted.
@@ -65,6 +82,17 @@ describe("registerRequestGuard: writes", () => {
   // Fails if a cross-site form POST (no custom header) is accepted.
   it("rejects a write without X-Strand-Request", async () => {
     expect((await post({})).statusCode).toBe(403);
+  });
+
+  // Fails if HEAD is treated as a write and needs X-Strand-Request.
+  it("treats HEAD as a read", async () => {
+    const res = await guarded().inject({ method: "HEAD", url: "/api/x", headers: { host: "localhost:3000" } });
+    expect(res.statusCode).toBe(200);
+  });
+
+  // Fails if an opaque `Origin: null` (sandboxed frame, file://) is accepted.
+  it("rejects a write with Origin null", async () => {
+    expect((await post({ "x-strand-request": "1", origin: "null" })).statusCode).toBe(403);
   });
 
   // Fails if a same-origin write from the app is rejected.

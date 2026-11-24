@@ -10,11 +10,10 @@ const preview: Preview = {
   parameters: {
     layout: "centered",
     backgrounds: {
-      default: "app",
+      default: "background",
       values: [
-        { name: "app", value: "#f5f5f4" },
-        { name: "raised", value: "#fafaf9" },
-        { name: "white", value: "#ffffff" },
+        { name: "background", value: "hsl(var(--background))" },
+        { name: "card", value: "hsl(var(--card))" },
       ],
     },
   },
