@@ -1,7 +1,7 @@
 import { lookup } from "node:dns/promises";
 import type { FastifyInstance } from "fastify";
 import type { Device, DiscoveredDevice, WledInfo } from "../../shared/apiTypes";
-import type { AppDeps } from "../app";
+import type { AppDeps, ServerDeps } from "../app";
 import * as devices from "../db/devices";
 import type { DeviceRow } from "../db/devices";
 import { ApiError, messages } from "../errors";
@@ -130,7 +130,7 @@ export function toDiscovered(found: { ip: string; host: string; info: WledInfo }
   };
 }
 
-export async function devicesRoutes(app: FastifyInstance, deps: AppDeps): Promise<void> {
+export async function devicesRoutes(app: FastifyInstance, deps: ServerDeps): Promise<void> {
   app.get("/api/devices", async () => {
     const rows = devices.list(deps.db);
     const now = deps.now();

@@ -1,7 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import type { Effect, Palette, StatePatch } from "../../shared/apiTypes";
-import type { AppDeps } from "../app";
+import type { ServerDeps } from "../app";
 import { ApiError, messages } from "../errors";
+import { setDevicePower } from "../lights/deviceLights";
 import { deviceRequest } from "../wled/deviceClient";
 import { palxStops, parseEffectMeta } from "../wled/effectMeta";
 import { targetOf } from "./devices";
@@ -17,7 +18,7 @@ const statePatchBody = {
 /** The name WLED gives to an effect slot that no effect uses. */
 const RESERVED_EFFECT = "RSVD";
 
-export async function controlRoutes(app: FastifyInstance, deps: AppDeps): Promise<void> {
+export async function controlRoutes(app: FastifyInstance, deps: ServerDeps): Promise<void> {
   app.get<{ Params: { id: string } }>("/api/devices/:id/state", async (request) =>
     deviceRequest<Record<string, unknown>>(deps, targetOf(loadDevice(deps, request.params.id)), "/json/state"),
   );
@@ -25,12 +26,7 @@ export async function controlRoutes(app: FastifyInstance, deps: AppDeps): Promis
   app.patch<{ Params: { id: string }; Body: StatePatch }>(
     "/api/devices/:id/state",
     { schema: { body: statePatchBody } },
-    async (request) =>
-      // `v` makes the device answer with its full state.
-      deviceRequest<Record<string, unknown>>(deps, targetOf(loadDevice(deps, request.params.id)), "/json/state", {
-        method: "POST",
-        body: { ...request.body, v: true },
-      }),
+    async (request) => setDevicePower(deps, loadDevice(deps, request.params.id), request.body),
   );
 
   app.get<{ Params: { id: string } }>("/api/devices/:id/effects", async (request): Promise<Effect[]> => {

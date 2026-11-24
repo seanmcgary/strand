@@ -7,6 +7,7 @@ import { ApiError, registerErrorHandler } from "./errors";
 import { controlRoutes } from "./routes/control";
 import { devicesRoutes } from "./routes/devices";
 import { discoveryRoutes } from "./routes/discovery";
+import { lightsRoutes } from "./routes/lights";
 import { preferencesRoutes } from "./routes/preferences";
 import { settingsRoutes } from "./routes/settings";
 import { isApiRequest, registerRequestGuard } from "./requestGuard";
@@ -73,6 +74,7 @@ export function buildApp(appDeps: AppDeps): FastifyInstance {
   app.register(discoveryRoutes, deps);
   app.register(settingsRoutes, deps);
   app.register(controlRoutes, deps);
+  app.register(lightsRoutes, deps);
   app.register(preferencesRoutes, deps);
 
   app.register(fastifyStatic, {

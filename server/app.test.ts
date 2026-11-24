@@ -82,6 +82,8 @@ describe("request guard on every route", () => {
     ["POST", "/api/devices/x/reboot", {}],
     ["POST", "/api/devices/x/networks/scan", {}],
     ["PATCH", "/api/devices/x/state", { on: true }],
+    ["PATCH", "/api/devices/x/lights", { on: true }],
+    ["POST", "/api/devices/x/lights/flash", { strandKey: "o0", led: 0 }],
     ["PUT", "/api/preferences/k", { value: "v" }],
   ];
   const variants: [string, Record<string, string>][] = [
