@@ -1,12 +1,21 @@
 import type { FastifyInstance } from "fastify";
-import type { PinInfo, WifiNetwork, WledConfig, WledConfigFull, WledInfo, Capabilities } from "../../shared/apiTypes";
+import type {
+  Capabilities,
+  ConfigPatch,
+  PinInfo,
+  WifiNetwork,
+  WledConfig,
+  WledConfigFull,
+  WledInfo,
+} from "../../shared/apiTypes";
 import type { AppDeps } from "../app";
 import * as devices from "../db/devices";
 import type { DeviceRow } from "../db/devices";
 import { ApiError, messages } from "../errors";
 import { parseCapabilities, pinsFromCapabilities } from "../wled/capabilities";
+import { classifyChanges, CONFIG_KEYS, checkUnsupported, mergeConfigPatch, topLevelBody } from "../wled/configMerge";
 import { deviceRequest } from "../wled/deviceClient";
-import { targetOf } from "./devices";
+import { lockCheck, targetOf } from "./devices";
 
 /** The most `/json/net` requests of one scan (spec §8.3). */
 const SCAN_REQUESTS = 10;
@@ -65,6 +74,27 @@ async function readCapabilities(deps: AppDeps, row: DeviceRow): Promise<Capabili
   return caps;
 }
 
+const configBody = {
+  type: "object",
+  additionalProperties: false,
+  properties: Object.fromEntries(
+    CONFIG_KEYS.map((key) => [
+      key,
+      // Settings writes only `def.on` and `def.bri`; the boot preset belongs to Strand (plan decision 4).
+      key === "def"
+        ? { type: "object", additionalProperties: false, properties: { on: {}, bri: {} } }
+        : { type: "object" },
+    ]),
+  ),
+} as const;
+
+const unlockBody = {
+  type: "object",
+  required: ["pin"],
+  additionalProperties: false,
+  properties: { pin: { type: "string", pattern: "^[0-9]{4}$" } },
+} as const;
+
 export async function settingsRoutes(app: FastifyInstance, deps: AppDeps): Promise<void> {
   app.get<{ Params: { id: string } }>("/api/devices/:id/info", async (request) =>
     readInfo(deps, loadDevice(deps, request.params.id)),
@@ -104,5 +134,74 @@ export async function settingsRoutes(app: FastifyInstance, deps: AppDeps): Promi
       if (i < SCAN_REQUESTS - 1) await new Promise((resolve) => setTimeout(resolve, deps.scanDelayMs));
     }
     return { networks: [] as WifiNetwork[] };
+  });
+
+  app.patch<{ Params: { id: string }; Body: ConfigPatch }>(
+    "/api/devices/:id/config",
+    { schema: { body: configBody } },
+    async (request) => {
+      const row = loadDevice(deps, request.params.id);
+      const target = targetOf(row);
+      const patch = request.body;
+
+      const before = await deviceRequest<WledConfigFull>(deps, target, "/json/cfg");
+      const unsupported = checkUnsupported(before, patch);
+      if (unsupported) throw new ApiError(422, "unsupported_change", unsupported);
+
+      const merged = mergeConfigPatch(before, patch);
+      await deviceRequest(deps, target, "/json/cfg", { method: "POST", body: topLevelBody(merged, patch) });
+      const after = await deviceRequest<WledConfigFull>(deps, target, "/json/cfg");
+
+      const { reconnect, reboot } = classifyChanges(before, after, patch);
+      if (reconnect) {
+        try {
+          await deviceRequest(deps, target, "/json/state", { method: "POST", body: { rb: true } });
+          devices.clearPendingReboot(deps.db, row.id, deps.now());
+        } catch (err) {
+          if (!(err instanceof ApiError)) throw err;
+          // The write is saved, so the config still returns; the new Wi-Fi waits for a reboot (plan decision 7).
+          devices.addPendingReboot(deps.db, row.id, ["Wi-Fi", ...reboot], deps.now());
+        }
+      } else {
+        devices.addPendingReboot(deps.db, row.id, reboot, deps.now());
+      }
+      return toWledConfig(after);
+    },
+  );
+
+  app.post<{ Params: { id: string }; Body: { pin: string } }>(
+    "/api/devices/:id/unlock",
+    { schema: { body: unlockBody } },
+    async (request, reply) => {
+      const target = targetOf(loadDevice(deps, request.params.id));
+      await deviceRequest(deps, target, "/json/state", { method: "POST", body: { pin: request.body.pin } });
+      if (await lockCheck(deps, target)) throw new ApiError(401, "wrong_pin", messages.wrongPin());
+      return reply.code(204).send();
+    },
+  );
+
+  app.post<{ Params: { id: string } }>("/api/devices/:id/reboot", async (request, reply) => {
+    const row = loadDevice(deps, request.params.id);
+    await deviceRequest(deps, targetOf(row), "/json/state", { method: "POST", body: { rb: true } });
+    devices.clearPendingReboot(deps.db, row.id, deps.now());
+    return reply.code(204).send();
+  });
+
+  app.get<{ Params: { id: string } }>("/api/devices/:id/pending-reboot", async (request): Promise<string[]> => {
+    const row = loadDevice(deps, request.params.id);
+    if (row.pendingReboot.length === 0) return [];
+    let info: WledInfo;
+    try {
+      info = await readInfo(deps, row);
+    } catch (err) {
+      if (err instanceof ApiError && err.code === "device_offline") return row.pendingReboot;
+      throw err;
+    }
+    const since = row.pendingSince === null ? NaN : Date.parse(row.pendingSince);
+    if (deps.now().getTime() - info.uptime * 1000 > since) {
+      devices.clearPendingReboot(deps.db, row.id, deps.now());
+      return [];
+    }
+    return row.pendingReboot;
   });
 }

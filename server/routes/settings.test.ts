@@ -170,3 +170,185 @@ describe("routes", () => {
     expect(res.json()).toMatchObject({ error: "device_offline" });
   });
 });
+
+describe("PATCH config", () => {
+  const writes = (f: FakeWled) => f.requests.filter((r) => r.method === "POST");
+  const sig = (f: FakeWled) => f.requests.map((r) => `${r.method} ${r.path}`);
+
+  // Fails if the write sends only the changed leaf, or more than one POST, or a key the body did not touch.
+  it("sends one POST with the full merged hw and returns the re-read config", async () => {
+    const { t, f, url } = await setup();
+    const res = await t.inject({ method: "PATCH", url: url("config"), payload: { hw: { led: { maxpwr: 850 } } } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json<WledConfig>().hw.led.maxpwr).toBe(850);
+    expect(writes(f)).toHaveLength(1);
+    const body = writes(f)[0]!.body as { hw: { led: { maxpwr: number }; btn?: unknown } };
+    expect(Object.keys(body)).toEqual(["hw"]);
+    expect(body.hw.led.maxpwr).toBe(850);
+    expect(body.hw.btn).toEqual((seeds.backyard.cfg.hw as unknown as { btn: unknown }).btn);
+  });
+
+  // Fails if the write rebuilds def from the body only and drops the boot preset the device has.
+  it("keeps the device's def.ps when only def.bri changes", async () => {
+    const { t, f, url } = await setup();
+    const res = await t.inject({ method: "PATCH", url: url("config"), payload: { def: { bri: 200 } } });
+    expect(res.statusCode).toBe(200);
+    expect((writes(f)[0]!.body as { def: object }).def).toEqual({ ...seeds.backyard.cfg.def, bri: 200 });
+  });
+
+  // Fails if a Wi-Fi change does not reread the config and then reboot, in that order, or leaves pending_reboot set.
+  it("reboots after a new SSID and clears pending_reboot", async () => {
+    const { t, f, row, url } = await setup();
+    const ins = [...seeds.backyard.cfg.nw.ins, { ssid: "Other", pskl: 0, ip: [0, 0, 0, 0], gw: [0, 0, 0, 0], sn: [255, 255, 255, 0] }];
+    const res = await t.inject({ method: "PATCH", url: url("config"), payload: { nw: { ins } } });
+    expect(res.statusCode).toBe(200);
+    expect(sig(f)).toEqual(["GET /json/cfg", "POST /json/cfg", "GET /json/cfg", "POST /json/state"]);
+    expect(f.requests[3]!.body).toEqual({ rb: true });
+    expect(devices.get(t.db, row.id)!.pendingReboot).toEqual([]);
+  });
+
+  // Fails if a failed reboot fails the write, or does not leave "Wi-Fi" pending.
+  it("returns the config and keeps Wi-Fi pending when the reboot fails", async () => {
+    const { t, f, url } = await setup();
+    f.failNext("timeout", { method: "POST", path: "/json/state" });
+    const ins = [...seeds.backyard.cfg.nw.ins, { ssid: "Other", pskl: 0, ip: [0, 0, 0, 0], gw: [0, 0, 0, 0], sn: [255, 255, 255, 0] }];
+    const res = await t.inject({ method: "PATCH", url: url("config"), payload: { nw: { ins } } });
+    expect(res.statusCode).toBe(200);
+    const pending = await t.inject({ method: "GET", url: url("pending-reboot") });
+    expect(pending.json<string[]>()).toContain("Wi-Fi");
+  });
+
+  // Fails if a hostname change reboots at once, or the pending list is not cleared once the device restarts.
+  it("holds a hostname change as pending until the device restarts", async () => {
+    let now = new Date("2026-11-24T12:00:00Z");
+    const { t, f, row, url } = await setup(undefined, () => now);
+    const res = await t.inject({ method: "PATCH", url: url("config"), payload: { id: { mdns: "porch" } } });
+    expect(res.statusCode).toBe(200);
+    expect(f.requests.some((r) => r.path === "/json/state")).toBe(false);
+    expect((await t.inject({ method: "GET", url: url("pending-reboot") })).json()).toEqual(["hostname"]);
+
+    now = new Date(now.getTime() + 10_000);
+    f.restart();
+    expect((await t.inject({ method: "GET", url: url("pending-reboot") })).json()).toEqual([]);
+    expect(devices.get(t.db, row.id)!.pendingReboot).toEqual([]);
+  });
+
+  // Fails if a locked device lets the write go on to the reboot, or changes pending_reboot.
+  it("returns pin_required and sends no reboot when the device is locked", async () => {
+    const { t, f, row, url } = await setup({ pin: "1234" });
+    const ins = [...seeds.backyard.cfg.nw.ins, { ssid: "Other", pskl: 0, ip: [0, 0, 0, 0], gw: [0, 0, 0, 0], sn: [255, 255, 255, 0] }];
+    const res = await t.inject({ method: "PATCH", url: url("config"), payload: { nw: { ins } } });
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toMatchObject({ error: "pin_required" });
+    expect(f.requests.some((r) => r.path === "/json/state")).toBe(false);
+    expect(devices.get(t.db, row.id)!.pendingReboot).toEqual([]);
+  });
+
+  // Fails if an offline device returns anything but 504 or the write still sends a request.
+  it("returns 504 when the device does not answer", async () => {
+    const { t, f, url } = await setup();
+    f.setMode("timeout");
+    const res = await t.inject({ method: "PATCH", url: url("config"), payload: { hw: { led: { maxpwr: 850 } } } });
+    expect(res.statusCode).toBe(504);
+    expect(writes(f)).toHaveLength(0);
+  });
+
+  // Fails if a failed re-read is swallowed and the reboot still goes out.
+  it("returns device_offline and sends no reboot when the re-read times out", async () => {
+    const { t, f, url } = await setup();
+    f.failNext("timeout", { method: "GET", path: "/json/cfg", skip: 1 });
+    const ins = [...seeds.backyard.cfg.nw.ins, { ssid: "Other", pskl: 0, ip: [0, 0, 0, 0], gw: [0, 0, 0, 0], sn: [255, 255, 255, 0] }];
+    const res = await t.inject({ method: "PATCH", url: url("config"), payload: { nw: { ins } } });
+    expect(res.statusCode).toBe(504);
+    expect(res.json()).toMatchObject({ error: "device_offline" });
+    expect(f.requests.some((r) => r.path === "/json/state")).toBe(false);
+  });
+
+  // Fails if the route sends a shrunk network list instead of refusing it.
+  it("returns 422 unsupported_change for a shorter nw.ins and sends no POST", async () => {
+    const { t, f, url } = await setup();
+    const res = await t.inject({ method: "PATCH", url: url("config"), payload: { nw: { ins: [] } } });
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toMatchObject({ error: "unsupported_change" });
+    expect(writes(f)).toHaveLength(0);
+  });
+
+  // Fails if the body check accepts a key outside CONFIG_KEYS, a non-object, or any def key but on and bri.
+  it.each([
+    ["an unlisted top-level key", { ota: { lock: false } }],
+    ["an array", []],
+    ["a non-object subtree", { hw: 5 }],
+    ["def.ps alone", { def: { ps: 250 } }],
+    ["def.ps beside on", { def: { on: true, ps: 1 } }],
+  ])("returns 400 invalid_request for %s and sends no POST", async (_name, payload) => {
+    const { t, f, url } = await setup();
+    const res = await t.inject({ method: "PATCH", url: url("config"), payload });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error: "invalid_request" });
+    expect(f.requests).toHaveLength(0);
+  });
+});
+
+describe("GET pending-reboot", () => {
+  // Fails if an empty pending list still asks the device.
+  it("returns [] with no device request when nothing is pending", async () => {
+    const { t, f, url } = await setup();
+    const res = await t.inject({ method: "GET", url: url("pending-reboot") });
+    expect(res.json()).toEqual([]);
+    expect(f.requests).toHaveLength(0);
+  });
+
+  // Fails if an offline device hides or clears the stored list.
+  it("returns the stored list when the device is offline", async () => {
+    const { t, f, row, url } = await setup();
+    devices.addPendingReboot(t.db, row.id, ["hostname"], new Date());
+    f.setMode("timeout");
+    const res = await t.inject({ method: "GET", url: url("pending-reboot") });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual(["hostname"]);
+  });
+});
+
+describe("POST unlock", () => {
+  // Fails if unlock does not send the PIN to the device, so the next write is still refused.
+  it("unlocks a locked device so a config write succeeds", async () => {
+    const { t, url } = await setup({ pin: "1234" });
+    expect((await t.inject({ method: "POST", url: url("unlock"), payload: { pin: "1234" } })).statusCode).toBe(204);
+    const res = await t.inject({ method: "PATCH", url: url("config"), payload: { hw: { led: { maxpwr: 850 } } } });
+    expect(res.statusCode).toBe(200);
+  });
+
+  // Fails if a wrong PIN is reported as success.
+  it("returns 401 wrong_pin for a wrong PIN", async () => {
+    const { t, url } = await setup({ pin: "1234" });
+    const res = await t.inject({ method: "POST", url: url("unlock"), payload: { pin: "0000" } });
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toMatchObject({ error: "wrong_pin" });
+  });
+
+  // Fails if a device with no PIN refuses to unlock.
+  it("returns 204 for a device with no PIN", async () => {
+    const { t, url } = await setup();
+    expect((await t.inject({ method: "POST", url: url("unlock"), payload: { pin: "1234" } })).statusCode).toBe(204);
+  });
+
+  // Fails if the body schema accepts a missing, short, or non-string PIN.
+  it.each([[{}], [{ pin: "12" }], [{ pin: 1234 }]])("returns 400 for %j and sends nothing", async (payload) => {
+    const { t, f, url } = await setup({ pin: "1234" });
+    const res = await t.inject({ method: "POST", url: url("unlock"), payload });
+    expect(res.statusCode).toBe(400);
+    expect(f.requests).toHaveLength(0);
+  });
+});
+
+describe("POST reboot", () => {
+  // Fails if reboot does not send rb or leaves pending_reboot set.
+  it("sends rb and clears pending_reboot", async () => {
+    const { t, f, row, url } = await setup();
+    devices.addPendingReboot(t.db, row.id, ["hostname"], new Date());
+    const res = await t.inject({ method: "POST", url: url("reboot") });
+    expect(res.statusCode).toBe(204);
+    expect(f.requests.at(-1)!.body).toEqual({ rb: true });
+    expect(devices.get(t.db, row.id)!.pendingReboot).toEqual([]);
+  });
+});
