@@ -65,22 +65,35 @@ describe("PATCH state", () => {
 });
 
 describe("GET effects and palettes", () => {
-  // Fails if the lists are not joined by index, or a RSVD entry stays in.
-  it("joins effects with fxdata and drops RSVD", async () => {
-    const { t, url } = await setup({ ...seeds.backyard, effects: ["Solid", "RSVD", "Blink"], fxdata: ["", "", "!,;!;"] });
+  // Fails if the route stops dropping RSVD or returning the parsed metadata fields.
+  it("returns effects with parsed metadata and without RSVD", async () => {
+    const { t, url } = await setup();
     const res = await t.inject({ method: "GET", url: url("effects") });
     expect(res.statusCode).toBe(200);
-    expect(res.json<Effect[]>()).toEqual([
-      { id: 0, name: "Solid", meta: "" },
-      { id: 2, name: "Blink", meta: "!,;!;" },
-    ]);
+    const effects = res.json<Effect[]>();
+    expect(effects).toHaveLength(10);
+    expect(effects.find((e) => e.name === "Blink")).toEqual({
+      id: 1,
+      name: "Blink",
+      pal: true,
+      sliders: ["Speed", "Duty cycle"],
+      checks: [],
+      colors: ["Fx", "Bg"],
+    });
   });
 
-  // Fails if palette ids are not the list index.
-  it("returns palettes with their index as id", async () => {
-    const { t, url } = await setup();
+  // Fails if the route does not read every palx page or drop color references.
+  it("returns palettes with stops from every palx page", async () => {
+    const { t, f, url } = await setup();
     const res = await t.inject({ method: "GET", url: url("palettes") });
-    expect(res.json<Palette[]>()).toEqual(seeds.backyard.palettes.map((name, id) => ({ id, name })));
+    const palettes = res.json<Palette[]>();
+    expect(palettes).toHaveLength(13);
+    expect(palettes[0]).toEqual({ id: 0, name: "Default", stops: ["#FF0000", "#FFA000"] });
+    expect(palettes[2]!.stops).toEqual([]);
+    expect(palettes[12]!.stops.every((s) => /^#[0-9A-F]{6}$/.test(s))).toBe(true);
+    const paths = f.requests.map((r) => r.path);
+    expect(paths).toContain("/json/palx?page=0");
+    expect(paths).toContain("/json/palx?page=1");
   });
 
   // Fails if a non-array effects reply is not mapped to 502 device_error.

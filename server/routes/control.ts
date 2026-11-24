@@ -3,6 +3,7 @@ import type { Effect, Palette, StatePatch } from "../../shared/apiTypes";
 import type { AppDeps } from "../app";
 import { ApiError, messages } from "../errors";
 import { deviceRequest } from "../wled/deviceClient";
+import { palxStops, parseEffectMeta } from "../wled/effectMeta";
 import { targetOf } from "./devices";
 import { loadDevice } from "./settings";
 
@@ -40,7 +41,7 @@ export async function controlRoutes(app: FastifyInstance, deps: AppDeps): Promis
       throw new ApiError(502, "device_error", messages.deviceError(target.name, "the reply is not valid"));
     }
     return names
-    .map((name, id) => ({ id, name, meta: fxdata[id] ?? "" }))
+    .map((name, id) => ({ id, name, ...parseEffectMeta(id, fxdata[id] ?? "") }))
     .filter((effect) => effect.name !== RESERVED_EFFECT);
   });
 
@@ -50,6 +51,19 @@ export async function controlRoutes(app: FastifyInstance, deps: AppDeps): Promis
     if (!Array.isArray(names)) {
       throw new ApiError(502, "device_error", messages.deviceError(target.name, "the reply is not valid"));
     }
-    return names.map((name, id) => ({ id, name }));
+    const stops = new Map<number, string[]>();
+    let last = 0;
+    // Pages are read one after another; `m` is the last page index.
+    for (let page = 0; page <= last; page++) {
+      const reply = await deviceRequest<{ m?: unknown; p?: unknown }>(deps, target, `/json/palx?page=${page}`);
+      if (typeof reply.p !== "object" || reply.p === null) {
+        throw new ApiError(502, "device_error", messages.deviceError(target.name, "the reply is not valid"));
+      }
+      if (Number.isInteger(reply.m) && (reply.m as number) > last) last = Math.min(reply.m as number, 64);
+      for (const [key, entries] of Object.entries(reply.p)) {
+        stops.set(Number(key), Array.isArray(entries) ? palxStops(entries) : []);
+      }
+    }
+    return names.map((name, id) => ({ id, name, stops: stops.get(id) ?? [] }));
   });
 }

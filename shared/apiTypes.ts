@@ -167,12 +167,21 @@ export interface StatePatch {
 export interface Effect {
   id: number;
   name: string;
-  meta: string;
+  /** Whether the effect uses a palette. */
+  pal: boolean;
+  /** Labels for sx, ix, c1, c2, c3; "" hides a slider. */
+  sliders: string[];
+  /** Labels for o1-o3; "" hides a checkbox. */
+  checks: string[];
+  /** Labels for col[0..2]; "" hides a color. */
+  colors: string[];
 }
 
 export interface Palette {
   id: number;
   name: string;
+  /** Preview colors as "#RRGGBB"; empty when the palette depends on the slot's colors. */
+  stops: string[];
 }
 
 export type ErrorCode =
