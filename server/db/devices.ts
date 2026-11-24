@@ -94,6 +94,7 @@ export function setLastIp(db: DatabaseSync, id: string, lastIp: string, now: Dat
 
 /** Adds `names` to the device's pending-reboot list (keeping order, without duplicates) and sets `pending_since`. */
 export function addPendingReboot(db: DatabaseSync, id: string, names: string[], now: Date): void {
+  if (names.length === 0) return;
   const at = now.toISOString();
   db.exec("BEGIN");
   try {

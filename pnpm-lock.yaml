@@ -29,6 +29,9 @@ importers:
       fastify:
         specifier: ^5.2.0
         version: 5.12.8
+      pino:
+        specifier: ^10.4.0
+        version: 10.4.0
       radix-ui:
         specifier: ^1.6.2
         version: 1.8.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)

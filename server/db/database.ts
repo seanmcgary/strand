@@ -16,7 +16,7 @@ export function runMigrations(db: DatabaseSync, list: string[]): void {
       db.exec(`PRAGMA user_version = ${n}`);
       db.exec("COMMIT");
     } catch (err) {
-      db.exec("ROLLBACK");
+      if (db.isTransaction) db.exec("ROLLBACK");
       throw err;
     }
   });

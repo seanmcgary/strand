@@ -84,6 +84,13 @@ describe("devices", () => {
     expect(devices.get(db, row.id)).toMatchObject({ pendingReboot: ["hostname", "static IP"], pendingSince: t1.toISOString() });
   });
 
+  // Fails if an empty list marks the device as waiting for a reboot (pending_since set with nothing pending).
+  it("ignores an empty list of pending-reboot reasons", () => {
+    const row = addDevice(db, "aabbccddeeff");
+    devices.addPendingReboot(db, row.id, [], t1);
+    expect(devices.get(db, row.id)).toEqual(row);
+  });
+
   // Fails if clearPendingReboot leaves the list or its time behind.
   it("clears pending-reboot reasons", () => {
     const row = addDevice(db, "aabbccddeeff");
