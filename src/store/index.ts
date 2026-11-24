@@ -1,4 +1,5 @@
 import { configureStore, type ReducersMapObject } from "@reduxjs/toolkit"
+import { devicesSlice } from "./slices/devices"
 
 /**
  * Store factory. The client builds exactly one store at bootstrap and each
@@ -10,7 +11,7 @@ export function makeStore<S>(reducers: ReducersMapObject<S>) {
 
 /** The slices the app runs with, one per domain. */
 export const reducers = {
-  app: (state: Record<string, never> = {}) => state,
+  devices: devicesSlice.reducer,
 }
 
 export type RootState = { [K in keyof typeof reducers]: ReturnType<(typeof reducers)[K]> }

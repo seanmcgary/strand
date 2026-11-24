@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { configureStore } from "@reduxjs/toolkit"
+import { ApiError } from "@/api/client"
 import { createApiThunk } from "./createApiThunk"
 
 function probeStore() {
@@ -22,15 +23,15 @@ describe("createApiThunk", () => {
     expect(fetchedAt).toBeLessThanOrEqual(after)
   })
 
-  // Fails if a thrown error body is not mapped to an ApiError payload.
+  // Fails if a thrown ApiError is not mapped to a { status, code, message } payload.
   it("still rejects with a mapped ApiError and stamps no timestamp", async () => {
     const thunk = createApiThunk<void, number>("probe/fail", async () => {
-      throw { code: 13, message: "boom" }
+      throw new ApiError(401, "pin_required", "boom")
     })
     const action = await probeStore().dispatch(thunk())
 
     expect(action.type).toBe("probe/fail/rejected")
-    expect(action.payload).toEqual({ status: undefined, code: 13, message: "boom" })
+    expect(action.payload).toEqual({ status: 401, code: "pin_required", message: "boom" })
     expect((action.meta as { fetchedAt?: number }).fetchedAt).toBeUndefined()
   })
 })

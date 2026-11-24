@@ -1,7 +1,8 @@
 import { createAsyncThunk } from "@reduxjs/toolkit"
+import { ApiError } from "@/api/client"
 
 /** Normalized error shape every rejected API thunk carries in `action.payload`. */
-export interface ApiError {
+export interface ThunkError {
   status?: number
   code?: string | number
   message: string
@@ -10,7 +11,7 @@ export interface ApiError {
 /** Standard `{loading, error}` pair tracked per async operation in a slice. */
 export interface RequestState {
   loading: boolean
-  error: ApiError | null
+  error: ThunkError | null
   /**
    * When this operation last SUCCEEDED, as an epoch millisecond value, or
    * `null`/absent when it has never succeeded in this store. Stamped from the
@@ -36,31 +37,16 @@ export const initialRequestState: RequestState = { loading: false, error: null }
  */
 export const loadingRequestState: RequestState = { loading: true, error: null }
 
-/** Shape of an error body thrown by an API call: `{code?, message?}`. */
-interface GrpcGatewayErrorBody {
-  code?: string | number
-  message?: string
-  status?: number
-}
-
-function isGrpcGatewayErrorBody(e: unknown): e is GrpcGatewayErrorBody {
-  return typeof e === "object" && e !== null && ("message" in e || "code" in e)
-}
-
 /**
- * Normalizes whatever an API call throws into an `ApiError`: a parsed JSON
- * error body (`{code?, message?}`), or a real `TypeError` on network failure.
+ * Normalizes whatever an API call throws into a `ThunkError`: an `ApiError`
+ * from the client, or a real `TypeError` on network failure.
  */
-export function toApiError(e: unknown): ApiError {
+export function toApiError(e: unknown): ThunkError {
+  if (e instanceof ApiError) {
+    return { status: e.status, code: e.code, message: e.message }
+  }
   if (e instanceof TypeError) {
     return { message: "Network error" }
-  }
-  if (isGrpcGatewayErrorBody(e)) {
-    return {
-      status: e.status,
-      code: e.code,
-      message: e.message ?? "Request failed",
-    }
   }
   return { message: String(e) }
 }
