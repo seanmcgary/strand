@@ -52,6 +52,12 @@ function slotReason(s: SlotView, effectCount: number, currentFx: number | undefi
   return null;
 }
 
+/** The current range a next range continues: the one with its name, or, when several share it, the one nearest its start. */
+function currentRange(current: RangeView[], name: string, start: number): RangeView | undefined {
+  const named = current.filter((c) => c.name.trim() === name);
+  return named.sort((a, b) => Math.abs(a.start - start) - Math.abs(b.start - start))[0];
+}
+
 /**
  * Why `ranges` do not fit `strand` (the contract's `invalid_layout` rules), or
  * null. `current` is the strand's view on the device, for the `fx` exception.
@@ -84,7 +90,7 @@ export function validateRanges(strand: Strand, ranges: RangeView[], effectCount:
     }
     const slots = p.kind === "every" ? p.n : 1;
     if (!Array.isArray(r.slots) || r.slots.length !== slots) return "a range has the wrong number of slots";
-    const current = opts.current?.find((c) => c.start === r.start && c.name.trim() === name);
+    const current = currentRange(opts.current ?? [], name, r.start);
     for (const [k, s] of r.slots.entries()) {
       const reason = slotReason(s, effectCount, current?.slots[k]?.fx);
       if (reason) return reason;

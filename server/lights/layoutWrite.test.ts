@@ -193,14 +193,14 @@ describe("writeStrand", () => {
     expect(layoutError(() => write(deviceState(splitBackyard), [all("A", 0, 150, { fx: 200 })])).code).toBe("invalid_layout");
   });
 
-  // Fails if the unknown-effect exception looks up the current range by name alone, so a second range with that name borrows it.
-  it("keeps the unknown-effect exception on its own range when names repeat", () => {
+  // Fails if the unknown-effect exception needs the range to keep its position, so a boundary drag is refused.
+  it("keeps an unknown effect when a boundary moves", () => {
     const state = deviceState([
-      { id: 0, n: "A", start: 0, stop: 75, fx: 200 },
-      { id: 1, n: "B", start: 75, stop: 150 },
+      { id: 0, n: "A", start: 0, stop: 75 },
+      { id: 1, n: "Odd", start: 75, stop: 150, fx: 200 },
     ]);
-    const next = [all("A", 0, 75, { fx: 200 }), all("A", 75, 75, { fx: 200 })];
-    expect(layoutError(() => writeStrand(state, o0, { ranges: next }, lists, {}, 32, { sharedNames: true })).code).toBe("invalid_layout");
+    const odd = viewOf(state).ranges[1]!;
+    expect(() => write(state, [all("A", 0, 80), { ...odd, start: 80, len: 70 }])).not.toThrow();
   });
 
   // Fails if the color diff ignores device colors the slot leaves out, or counts an RGBW read-back as a change.
@@ -265,6 +265,14 @@ describe("validateRanges", () => {
     expect(validateRanges(o0, twoA, lists.effects.length, { sharedNames: true })).toBeNull();
     expect(validateRanges(o0, [all("A", 0, 75), all("B", 75, 75)], lists.effects.length)).toBeNull();
     expect(validateRanges(o0, [all("🎄".repeat(64), 0, 150)], lists.effects.length)).toBeNull();
+  });
+
+  // Fails if, among current ranges that share a name, the unknown-effect exception is taken from one other than the nearest start.
+  it("takes the unknown-effect exception from the nearest range of that name", () => {
+    const current = [all("A", 0, 75, { fx: 200 }), all("A", 75, 75)];
+    const next = [all("A", 0, 70), all("A", 70, 80, { fx: 200 })];
+    expect(validateRanges(o0, next, lists.effects.length, { sharedNames: true, current })).not.toBeNull();
+    expect(validateRanges(o0, [all("A", 0, 80, { fx: 200 }), all("A", 80, 70)], lists.effects.length, { sharedNames: true, current })).toBeNull();
   });
 
   // Fails if readLayout can produce names that validateRanges refuses (finding F7).
