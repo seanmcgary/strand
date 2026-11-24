@@ -27,22 +27,57 @@ export function loadDevice(deps: AppDeps, id: string): DeviceRow {
   return row;
 }
 
-/** Reads `/json/info` and records that the device answered (spec §7). */
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+const sub = (v: unknown): Record<string, unknown> => (isObject(v) ? v : {});
+
+/** Reads `/json/info` and records that the device answered (spec §7). Returns the fields of `WledInfo` and no others. */
 export async function readInfo(deps: AppDeps, row: DeviceRow): Promise<WledInfo> {
-  const info = await deviceRequest<WledInfo>(deps, targetOf(row), "/json/info");
+  const raw = await deviceRequest<WledInfo>(deps, targetOf(row), "/json/info");
+  const { fs, wifi, leds } = { fs: sub(raw.fs), wifi: sub(raw.wifi), leds: sub(raw.leds) };
+  if (typeof raw.ver !== "string" || typeof raw.mac !== "string" || typeof raw.uptime !== "number" || typeof leds.count !== "number") {
+    throw new ApiError(502, "device_error", messages.firmwareUnsupported(row.name));
+  }
+  const info = {
+    ver: raw.ver,
+    vid: raw.vid,
+    name: raw.name,
+    mac: raw.mac,
+    ip: raw.ip,
+    arch: raw.arch,
+    clock: raw.clock,
+    flash: raw.flash,
+    uptime: raw.uptime,
+    freeheap: raw.freeheap,
+    ...(raw.psram === undefined ? {} : { psram: raw.psram }),
+    fs: { u: fs.u, t: fs.t },
+    wifi: {
+      rssi: wifi.rssi,
+      signal: wifi.signal,
+      channel: wifi.channel,
+      band: wifi.band,
+      ap: wifi.ap,
+      ...(wifi.ssid === undefined ? {} : { ssid: wifi.ssid }),
+    },
+    leds: { count: leds.count, fps: leds.fps, pwr: leds.pwr, maxpwr: leds.maxpwr, maxseg: leds.maxseg },
+    live: raw.live,
+  } as WledInfo;
   // A recovery during the request saved the new address, so read it back instead of writing the old one.
   const lastIp = devices.get(deps.db, row.id)?.lastIp ?? row.lastIp;
-  const name = typeof info.name === "string" && info.name !== "" ? info.name : row.name;
+  const name = typeof info.name === "string" && info.name !== "" ? info.name.slice(0, 64) : row.name;
   devices.recordSeen(deps.db, row.id, { name, lastIp }, deps.now());
   return info;
 }
 
-const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
-
 /** The subtrees of `/json/cfg` that `WledConfig` names, and no other key of them. */
-export function toWledConfig(cfg: WledConfigFull): WledConfig {
-  const sub = (v: unknown): Record<string, unknown> => (isObject(v) ? v : {});
+export function toWledConfig(cfg: WledConfigFull, name: string): WledConfig {
   const { on, bri } = sub(cfg.def);
+  if (
+    !(isObject(cfg.id) && isObject(cfg.nw) && Array.isArray(cfg.nw.ins) && isObject(cfg.ap) && isObject(sub(cfg.hw).led) && isObject(sub(cfg.if).sync)) ||
+    typeof on !== "boolean" ||
+    typeof bri !== "number"
+  ) {
+    throw new ApiError(502, "device_error", messages.firmwareUnsupported(name));
+  }
   return {
     id: cfg.id,
     nw: cfg.nw,
@@ -51,7 +86,7 @@ export function toWledConfig(cfg: WledConfigFull): WledConfig {
     light: cfg.light,
     hw: { led: sub(cfg.hw).led },
     if: { sync: sub(cfg.if).sync },
-  } as WledConfig;
+  } as unknown as WledConfig;
 }
 
 function isPinInfo(v: unknown): v is PinInfo {
@@ -109,7 +144,7 @@ export async function settingsRoutes(app: FastifyInstance, deps: AppDeps): Promi
 
   app.get<{ Params: { id: string } }>("/api/devices/:id/config", async (request) => {
     const row = loadDevice(deps, request.params.id);
-    return toWledConfig(await deviceRequest<WledConfigFull>(deps, targetOf(row), "/json/cfg"));
+    return toWledConfig(await deviceRequest<WledConfigFull>(deps, targetOf(row), "/json/cfg"), row.name);
   });
 
   app.get<{ Params: { id: string } }>("/api/devices/:id/capabilities", async (request): Promise<Capabilities> => {
@@ -172,7 +207,7 @@ export async function settingsRoutes(app: FastifyInstance, deps: AppDeps): Promi
       } else {
         devices.addPendingReboot(deps.db, row.id, reboot, deps.now());
       }
-      return toWledConfig(after);
+      return toWledConfig(after, row.name);
     },
   );
 

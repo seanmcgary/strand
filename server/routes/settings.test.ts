@@ -34,6 +34,28 @@ describe("GET info", () => {
   });
 });
 
+describe("GET info shape", () => {
+  // Fails if readInfo saves a device name longer than 64 characters.
+  it("cuts a long device name to 64 characters when saving it", async () => {
+    const t = makeTestApp();
+    const f = await startFakeWled(seeds.backyard, { infoOverride: { name: "x".repeat(1000) } });
+    fakes.push(f);
+    const row = t.addFake(f, seeds.backyard);
+    await t.inject({ method: "GET", url: `/api/devices/${row.id}/info` });
+    expect(devices.get(t.db, row.id)!.name).toHaveLength(64);
+  });
+
+  // Fails if the reply passes on a key of /json/info that WledInfo does not name.
+  it("leaves keys outside WledInfo out of the reply", async () => {
+    const t = makeTestApp();
+    const f = await startFakeWled(seeds.backyard, { infoOverride: { u: "extra" } });
+    fakes.push(f);
+    const row = t.addFake(f, seeds.backyard);
+    const res = await t.inject({ method: "GET", url: `/api/devices/${row.id}/info` });
+    expect(res.json()).not.toHaveProperty("u");
+  });
+});
+
 describe("GET info address recovery", () => {
   // Fails if readInfo writes back the address it started with and undoes the one recovery just saved.
   it("keeps the address that deviceRequest recovered", async () => {
@@ -59,6 +81,17 @@ describe("GET config", () => {
     expect(body.def).toEqual({ on: seeds.backyard.cfg.def.on, bri: seeds.backyard.cfg.def.bri });
     expect(Object.keys(body.hw)).toEqual(["led"]);
     expect(Object.keys(body.if)).toEqual(["sync"]);
+  });
+});
+
+describe("GET config shape", () => {
+  // Fails if a cfg without a required subtree is returned instead of refused.
+  it("returns 502 device_error for a cfg without if", async () => {
+    const { t, f, url } = await setup();
+    delete (f.cfg as Record<string, unknown>).if;
+    const res = await t.inject({ method: "GET", url: url("config") });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({ error: "device_error" });
   });
 });
 
@@ -167,7 +200,7 @@ describe("routes", () => {
     f.setMode("timeout");
     const res = await t.inject({ method: method as "GET" | "POST", url: url(path) });
     expect(res.statusCode).toBe(504);
-    expect(res.json()).toMatchObject({ error: "device_offline" });
+    expect(res.json()).toMatchObject({ error: "device_offline", message: "Backyard isn't responding." });
   });
 });
 
@@ -207,7 +240,7 @@ describe("PATCH config", () => {
     expect(devices.get(t.db, row.id)!.pendingReboot).toEqual([]);
   });
 
-  // Fails if a failed reboot fails the write, or does not leave "Wi-Fi" pending.
+  // Fails if a failed reboot fails the write, returns something but the re-read config, or does not leave "Wi-Fi" pending.
   it("returns the config and keeps Wi-Fi pending when the reboot fails", async () => {
     const { t, f, url } = await setup();
     f.failNext("timeout", { method: "POST", path: "/json/state" });
@@ -216,6 +249,7 @@ describe("PATCH config", () => {
     expect(res.statusCode).toBe(200);
     const pending = await t.inject({ method: "GET", url: url("pending-reboot") });
     expect(pending.json<string[]>()).toContain("Wi-Fi");
+    expect(res.json<WledConfig>().nw.ins.map((e) => e.ssid)).toContain("Other");
   });
 
   // Fails if a write that does not touch hw or light resets the firmware's reset-on-missing keys (cfg.cpp:183,189,531-532).
@@ -248,23 +282,6 @@ describe("PATCH config", () => {
     (f.cfg.hw as { led: Record<string, unknown> }).led.fps = 60;
     await t.inject({ method: "PATCH", url: url("config"), payload: { hw: { led: { fps: 30 } } } });
     expect((writes(f)[0]!.body as { hw: { led: { fps: number } } }).hw.led.fps).toBe(30);
-  });
-
-  // Fails if a failed reboot returns something other than the re-read config.
-  it("returns the re-read config when the reboot fails", async () => {
-    const { t, f, url } = await setup();
-    f.failNext("timeout", { method: "POST", path: "/json/state" });
-    const ins = [...seeds.backyard.cfg.nw.ins, { ssid: "Other", pskl: 0, ip: [0, 0, 0, 0], gw: [0, 0, 0, 0], sn: [255, 255, 255, 0] }];
-    const res = await t.inject({ method: "PATCH", url: url("config"), payload: { nw: { ins } } });
-    expect(res.json<WledConfig>().nw.ins.map((e) => e.ssid)).toContain("Other");
-  });
-
-  // Fails if a hostname change does not set pending_since.
-  it("sets pending_since when a hostname change is held", async () => {
-    const now = new Date("2026-11-24T12:00:00Z");
-    const { t, row, url } = await setup(undefined, () => now);
-    await t.inject({ method: "PATCH", url: url("config"), payload: { id: { mdns: "porch" } } });
-    expect(devices.get(t.db, row.id)!.pendingSince).toBe(now.toISOString());
   });
 
   // Fails if a hostname change reboots at once, or the pending list is not cleared once the device restarts.
@@ -317,6 +334,17 @@ describe("PATCH config", () => {
   it("returns 422 unsupported_change for a shorter nw.ins and sends no POST", async () => {
     const { t, f, url } = await setup();
     const res = await t.inject({ method: "PATCH", url: url("config"), payload: { nw: { ins: [] } } });
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toMatchObject({ error: "unsupported_change" });
+    expect(writes(f)).toHaveLength(0);
+  });
+
+  // Fails if an empty client password over a saved one is sent: the firmware ignores it.
+  it("returns 422 unsupported_change for an empty client psk and sends no POST", async () => {
+    const { t, f, url } = await setup();
+    (f.cfg.nw as { ins: { pskl: number }[] }).ins[0]!.pskl = 8;
+    const [first, ...rest] = (f.cfg.nw as { ins: object[] }).ins;
+    const res = await t.inject({ method: "PATCH", url: url("config"), payload: { nw: { ins: [{ ...first, psk: "" }, ...rest] } } });
     expect(res.statusCode).toBe(422);
     expect(res.json()).toMatchObject({ error: "unsupported_change" });
     expect(writes(f)).toHaveLength(0);

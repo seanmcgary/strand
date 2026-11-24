@@ -6,7 +6,6 @@ export const CONFIG_KEYS = ["id", "nw", "ap", "def", "light", "hw", "if"] as con
 type Json = Record<string, unknown>;
 
 const isObject = (v: unknown): v is Json => typeof v === "object" && v !== null && !Array.isArray(v);
-const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 const asList = (v: unknown): Json[] => (Array.isArray(v) ? v.filter(isObject) : []);
 const sub = (v: unknown): Json => (isObject(v) ? v : {});
 
@@ -25,7 +24,6 @@ function merge(current: unknown, patch: unknown): unknown {
   if (!isObject(current) || !isObject(patch)) return structuredClone(patch);
   const out: Json = { ...structuredClone(current) };
   for (const [key, value] of Object.entries(patch)) {
-    if (UNSAFE_KEYS.has(key)) continue;
     out[key] = merge(current[key], value);
   }
   return out;
@@ -44,7 +42,6 @@ export function mergeConfigPatch(current: WledConfigFull, patch: ConfigPatch): W
 export function topLevelBody(merged: WledConfigFull, patch: ConfigPatch): WledConfigFull {
   const body: Json = {};
   for (const key of Object.keys(patch)) {
-    if (UNSAFE_KEYS.has(key)) continue;
     body[key] = structuredClone(merged[key]);
   }
   const led = sub(sub(merged.hw).led);

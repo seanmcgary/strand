@@ -6,7 +6,7 @@ import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { buildApp } from "./app";
 import { loadConfig } from "./config";
-import { ApiError, messages } from "./errors";
+import { ApiError } from "./errors";
 
 let webDistDir: string;
 let app: FastifyInstance;
@@ -86,12 +86,5 @@ describe("error handler", () => {
     const res = await post(JSON.stringify({ v: "a".repeat(40 * 1024) }));
     expect(res.statusCode).toBe(413);
     expect(res.json()).toEqual({ error: "invalid_request", message: "That request isn't valid." });
-  });
-});
-
-describe("messages", () => {
-  // Fails if the device_offline text drifts from the design's mock.
-  it("names the device in deviceOffline", () => {
-    expect(messages.deviceOffline("Backyard")).toBe("Backyard isn't responding.");
   });
 });
