@@ -14,12 +14,12 @@
 
 | Field     | Value                                                        |
 |-----------|--------------------------------------------------------------|
-| stage     | 2 (plan review)                                              |
+| stage     | 3 (implementation)                                           |
 | class     | large (new subsystem, new schema, new public API)            |
 | profile   | backend (the frontend part is a scaffold with no screens)    |
 | branch    | feat/app-server                                              |
 | pr        | n/a (no git remote: commit locally, no draft PR)             |
-| gate      | pending                                                      |
+| gate      | approved 2026-11-23                                          |
 | round     | 0                                                            |
 | decisions | 0                                                            |
 
