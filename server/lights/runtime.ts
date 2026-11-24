@@ -5,7 +5,8 @@ import { targetOf } from "../routes/devices";
 import { deviceRequest } from "../wled/deviceClient";
 import { maxsegOf } from "./deviceLights";
 import { isObject, parseState, type PaintMap } from "./layoutRead";
-import { buildStartupPreset, jsonBufferSize, startupPaint } from "./startup";
+import { fitsDevice } from "../wled/jsonLimits";
+import { buildStartupPreset, startupPaint } from "./startup";
 
 /**
  * The server's only in-memory state (CONVENTIONS.md §5), per device: the flash
@@ -33,6 +34,11 @@ export type LightsRuntime = {
   paintFor(deviceId: string): PaintMap;
   /** What the last startup save of the device left out, or null. */
   startupIssue(deviceId: string): StartupIssue | null;
+  /**
+   * Starts a new flash of the device and returns whether it is still the
+   * newest one. A flash end that waited its turn checks it, so it never ends a newer flash.
+   */
+  flashTicket(deviceId: string): () => boolean;
   /** Calls `end` after `flashMs`; a previous flash's `end` is dropped. */
   startFlash(deviceId: string, end: () => Promise<void>): void;
   flashActive(deviceId: string): boolean;
@@ -45,7 +51,6 @@ export type LightsRuntime = {
 type Timing = { flashMs: number; startupDelayMs: number };
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err));
-const bytes = (body: unknown): number => Buffer.byteLength(JSON.stringify(body));
 
 export function createLightsRuntime(deps: AppDeps & Timing, log: RuntimeLog): LightsRuntime {
   const startupTimers = new Map<string, NodeJS.Timeout>();
@@ -55,6 +60,7 @@ export function createLightsRuntime(deps: AppDeps & Timing, log: RuntimeLog): Li
   const lastSave = new Map<string, number>();
   const paints = new Map<string, PaintMap>();
   const issues = new Map<string, StartupIssue>();
+  const flashes = new Map<string, number>();
   let closed = false;
 
   const run = <T>(deviceId: string, fn: () => Promise<T>): Promise<T> => {
@@ -78,8 +84,8 @@ export function createLightsRuntime(deps: AppDeps & Timing, log: RuntimeLog): Li
 
   /**
    * One startup save. It reads preset 250's paint first, so a strand not edited
-   * since the last save keeps its paint. A body over the device's JSON buffer is
-   * sent without paint; one still over it is not sent.
+   * since the last save keeps its paint. A body the device would refuse
+   * (`fitsDevice`) is sent without paint; one it would still refuse is not sent.
    * Returns whether the paint memory was saved.
    */
   const save = async (row: devices.DeviceRow, memory: PaintMap): Promise<boolean> => {
@@ -87,13 +93,13 @@ export function createLightsRuntime(deps: AppDeps & Timing, log: RuntimeLog): Li
     const state = parseState(await deviceRequest<unknown>(deps, target, "/json/state"));
     const info = await deviceRequest<unknown>(deps, target, "/json/info");
     const maxseg = maxsegOf(info, row.name);
-    const limit = jsonBufferSize(isObject(info) ? info.arch : undefined);
+    const arch = isObject(info) ? info.arch : undefined;
     const presets = await deviceRequest<unknown>(deps, target, "/presets.json");
     let body = buildStartupPreset(state, { ...startupPaint(presets), ...memory }, maxseg);
     let issue: StartupIssue | null = null;
-    if (bytes(body) > limit) {
+    if (!fitsDevice(body, arch)) {
       body = buildStartupPreset(state, {}, maxseg);
-      issue = bytes(body) > limit ? "size" : "paint";
+      issue = fitsDevice(body, arch) ? "paint" : "size";
     }
     if (issue === "size") {
       issues.set(row.id, issue);
@@ -149,6 +155,11 @@ export function createLightsRuntime(deps: AppDeps & Timing, log: RuntimeLog): Li
     startupIssue(deviceId) {
       return issues.get(deviceId) ?? null;
     },
+    flashTicket(deviceId) {
+      const n = (flashes.get(deviceId) ?? 0) + 1;
+      flashes.set(deviceId, n);
+      return () => flashes.get(deviceId) === n;
+    },
     startFlash(deviceId, end) {
       clearTimeout(flashTimers.get(deviceId));
       if (closed) return;
@@ -171,6 +182,7 @@ export function createLightsRuntime(deps: AppDeps & Timing, log: RuntimeLog): Li
       paints.delete(deviceId);
       issues.delete(deviceId);
       lastSave.delete(deviceId);
+      flashes.delete(deviceId);
     },
     close() {
       closed = true;

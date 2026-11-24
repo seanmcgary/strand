@@ -31,19 +31,6 @@ export function buildStartupPreset(state: WledState, paint: PaintMap, maxseg: nu
 }
 
 /**
- * The device's JSON request limit, `JSON_BUFFER_SIZE` (`~/Code/WLED/wled00/const.h:656-664`):
- * 10240 on ESP8266, 24576 on ESP32-S2, 32767 on other ESP32. `info.arch` is
- * "esp8266", "esp32", or the chip model, such as "ESP32-S2" (`json.cpp:853-871`).
- * An unknown arch gets the smallest limit.
- */
-export function jsonBufferSize(arch: unknown): number {
-  const a = typeof arch === "string" ? arch.toLowerCase() : "";
-  if (a === "esp32-s2") return 24576;
-  if (a.startsWith("esp32")) return 32767;
-  return 10240;
-}
-
-/**
  * The paint in `/presets.json`'s preset 250, by segment name. A `seg` entry
  * counts only when `n` is a string, `i` is an array, and `start` and `stop` give its length.
  */

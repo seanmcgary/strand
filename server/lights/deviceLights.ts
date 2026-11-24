@@ -6,6 +6,7 @@ import * as strandGroups from "../db/strandGroups";
 import { ApiError, messages } from "../errors";
 import { targetOf } from "../routes/devices";
 import { deviceRequest } from "../wled/deviceClient";
+import { fitsDevice, splitRuns } from "../wled/jsonLimits";
 import {
   decodePaint,
   encodePaint,
@@ -48,8 +49,6 @@ export const notices = {
   paintNotSaved: "Painted colors won't survive a restart: there are too many painted LEDs to save on this controller.",
   tooLarge: "Your setup is too large to keep after a restart.",
 };
-/** The most color runs (`start, stop, "RRGGBB"`) in one request, to stay under the device's JSON buffer. */
-const RUNS_PER_REQUEST = 256;
 
 type Json = Record<string, unknown>;
 
@@ -132,10 +131,10 @@ export async function clearLeftovers(deps: ServerDeps, d: DeviceLights): Promise
   if (d.dropped.length > 0) {
     strandGroups.replace(deps.db, d.row.id, strandGroups.list(deps.db, d.row.id).filter((k) => !d.dropped.includes(k)));
   }
-  const state =
-    d.state.seg.some((s) => s.n === FLASH_NAME) && !deps.lights.flashActive(d.row.id)
-      ? await deps.lights.run(d.row.id, () => deleteFlashes(deps, d.row, true))
-      : d.state;
+  // `flashActive` is read in turn: a flash that started while this waited is not a leftover.
+  const state = d.state.seg.some((s) => s.n === FLASH_NAME)
+    ? await deps.lights.run(d.row.id, async () => (deps.lights.flashActive(d.row.id) ? d.state : deleteFlashes(deps, d.row, true)))
+    : d.state;
   if (d.dropped.length === 0 && state === d.state) return d;
   const next = { ...d, state, dropped: [] };
   return { ...next, view: viewOf(deps, next, d.view.segments.max, d.view.matrix) };
@@ -163,6 +162,7 @@ async function deleteFlashes(deps: ServerDeps, row: DeviceRow, reread: boolean):
  */
 export async function flashLed(deps: ServerDeps, d: DeviceLights, start: number): Promise<void> {
   const { row } = d;
+  const newest = deps.lights.flashTicket(row.id);
   await deps.lights.run(row.id, async () => {
     const target = targetOf(row);
     const state = parseState(await deviceRequest<unknown>(deps, target, "/json/state"));
@@ -174,17 +174,11 @@ export async function flashLed(deps: ServerDeps, d: DeviceLights, start: number)
     const flash = { id, start, stop: start + 1, fx: 0, col: [[255, 255, 255]], bri: 255, on: true, n: FLASH_NAME };
     await deviceRequest(deps, target, "/json/state", { method: "POST", body: { seg: [...deletes, flash] } });
     deps.lights.startFlash(row.id, async () => {
-      await deps.lights.run(row.id, () => deleteFlashes(deps, row, false));
+      await deps.lights.run(row.id, async () => {
+        if (newest()) await deleteFlashes(deps, row, false);
+      });
     });
   });
-}
-
-/** Splits a `seg.i` array into requests of at most `RUNS_PER_REQUEST` runs. */
-function paintChunks(i: (number | string)[]): (number | string)[][] {
-  const size = RUNS_PER_REQUEST * 3;
-  const out: (number | string)[][] = [];
-  for (let k = 0; k < i.length; k += size) out.push(i.slice(k, k + size));
-  return out;
 }
 
 /**
@@ -212,7 +206,8 @@ export async function writeLayout(deps: ServerDeps, d: DeviceLights, write: Layo
         Object.fromEntries(write.paint.map((p) => [p.name, decodePaint(p.i, byName.get(p.name)!.stop - byName.get(p.name)!.start)])),
       );
       for (const p of write.paint) {
-        for (const i of paintChunks(p.i)) await post({ seg: { id: byName.get(p.name)!.id, i } });
+        const id = byName.get(p.name)!.id;
+        for (const i of splitRuns(p.i, (part) => ({ seg: { id, i: part } }), d.info.arch)) await post({ seg: { id, i } });
       }
     });
   } catch (err) {
@@ -244,18 +239,14 @@ async function sendPower(deps: ServerDeps, row: DeviceRow, patch: LightsPatch): 
   .filter((s) => paint[s.n!]?.length === s.stop - s.start)
   .map((s) => ({ id: s.id, i: encodePaint(paint[s.n!]!) }));
 
-  // The first request carries the paint that fits in one request; the rest follows, `RUNS_PER_REQUEST` runs at a time.
+  // The first request carries the whole segments' paint that fits the device; the rest follows in requests that fit.
+  const info = items.length > 0 ? await deviceRequest<unknown>(deps, target, "/json/info") : undefined;
+  const arch = isObject(info) ? info.arch : undefined;
   const first: { id: number; i: (number | string)[] }[] = [];
   const rest: { id: number; i: (number | string)[] }[] = [];
-  let runs = 0;
   for (const item of items) {
-    const n = item.i.length / 3;
-    if (rest.length === 0 && runs + n <= RUNS_PER_REQUEST) {
-      first.push(item);
-      runs += n;
-    } else {
-      rest.push(...paintChunks(item.i).map((i) => ({ id: item.id, i })));
-    }
+    if (rest.length === 0 && fitsDevice({ ...body, seg: [...first, item] }, arch)) first.push(item);
+    else rest.push(...splitRuns(item.i, (part) => ({ seg: { id: item.id, i: part } }), arch).map((i) => ({ id: item.id, i })));
   }
   const reply = await deviceRequest<Record<string, unknown>>(deps, target, "/json/state", {
     method: "POST",

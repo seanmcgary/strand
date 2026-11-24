@@ -42,13 +42,24 @@ describe("fake WLED device", () => {
     expect(cfg.def.ps).toBe(250);
   });
 
-  // Fails if a body over the size limit is applied or answered with anything but 400.
-  it("refuses a body over maxBody with 400 and changes nothing", async () => {
+  // Fails if a body of 16384 bytes or more is applied or answered with anything but 413 (AsyncJson-v6.h:118, :144, :154).
+  it("refuses a body of 16384 bytes with 413 and changes nothing", async () => {
     const f = await start(seeds.backyard);
     const before = f.state;
     const prefix = '{"seg":[{"id":0,"n":"X"}],"pad":"';
-    const body = `${prefix}${"a".repeat(10241 - prefix.length - 2)}"}`;
-    expect(body).toHaveLength(10241);
+    const body = `${prefix}${"a".repeat(16384 - prefix.length - 2)}"}`;
+    expect(body).toHaveLength(16384);
+    const res = await post(f, "/json/state", body);
+    expect(res.status).toBe(413);
+    expect(f.state).toEqual(before);
+  });
+
+  // Fails if a body whose parsed values do not fit the ESP8266's 10240-byte JSON document is applied or answered with anything but 400.
+  it("refuses a body over the JSON document with 400 and changes nothing", async () => {
+    const f = await start(seeds.frontRoof);
+    const before = f.state;
+    const body = JSON.stringify({ seg: [{ id: 0, n: "X" }], pad: Array<number>(640).fill(1) });
+    expect(body.length).toBeLessThan(16384);
     const res = await post(f, "/json/state", body);
     expect(res.status).toBe(400);
     expect(f.state).toEqual(before);

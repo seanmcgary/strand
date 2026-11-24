@@ -26,7 +26,11 @@ export type FakeOpts = {
   infoOverride?: object;
   /** Listen on this port instead of a free one. */
   port?: number;
-  /** The largest POST body in bytes; a larger one gets 400 (`JSON_BUFFER_SIZE`, 10240 on ESP8266). */
+  /**
+   * The size in bytes of the device's JSON document (`JSON_BUFFER_SIZE`, const.h:656-664). Defaults to the
+   * seed arch's: 10240 on ESP8266, 24576 on ESP32-S2, 32767 on other ESP32. A POST body whose parsed values
+   * need more (16 bytes each) gets 400; a body of 16384 bytes or more gets 413 (AsyncJson-v6.h:118, :144, :154).
+   */
   maxBody?: number;
 };
 
@@ -42,6 +46,8 @@ export type FakeWled = {
   cfg: Record<string, unknown>;
   /** The state `GET /json/state` returns, as a snapshot. */
   readonly state: ReturnType<typeof listState>;
+  /** The raw pixels of segment `id` (relative to its start) that `seg.i` set; `null` is black that `i` did not set. */
+  pixels(id: number): (string | null)[];
   /** Applies a state change made by another client. */
   applyState(body: Record<string, unknown>): void;
   /** Runs `fn` once, after the next `POST /json/state` is applied and before it is answered. */
@@ -69,7 +75,7 @@ export async function startFakeWled(seed: Seed, opts: FakeOpts = {}): Promise<Fa
   const def = cfg.def as { on: boolean; bri: number; ps: number };
   const sim = simFromState(seed.state as Parameters<typeof simFromState>[0], seed.info.leds.maxseg, seed.info.leds.count);
   sim.presets = clone(seed.presets);
-  const maxBody = opts.maxBody ?? 10240;
+  const maxBody = opts.maxBody ?? docSize(seed.info.arch);
   let afterPostFns: (() => void)[] = [];
   const requests: FakeWled["requests"] = [];
   let mode: FakeMode = "ok";
@@ -124,17 +130,25 @@ export async function startFakeWled(seed: Seed, opts: FakeOpts = {}): Promise<Fa
   };
 
   const app = Fastify({ logger: false, forceCloseConnections: true });
-  // The firmware answers a body over its JSON buffer with 400 and applies nothing.
+  // AsyncJson keeps no body of 16384 bytes or more and answers 413. ArduinoJson parses the body in place,
+  // so only its values take room in the document; when they do not fit, the device answers 400. Neither applies anything.
   app.addContentTypeParser("application/json", { parseAs: "string" }, (_request, body, done) => {
-    if (Buffer.byteLength(body as string) > maxBody) {
-      done(Object.assign(new Error("body too large"), { statusCode: 400 }), undefined);
+    if (Buffer.byteLength(body as string) >= 16384) {
+      done(Object.assign(new Error("body too large"), { statusCode: 413 }), undefined);
       return;
     }
+    let parsed: unknown;
     try {
-      done(null, JSON.parse(body as string));
+      parsed = JSON.parse(body as string);
     } catch (err) {
       done(Object.assign(err as Error, { statusCode: 400 }), undefined);
+      return;
     }
+    if (valueCount(parsed) * 16 > maxBody) {
+      done(Object.assign(new Error("document too large"), { statusCode: 400 }), undefined);
+      return;
+    }
+    done(null, parsed);
   });
   app.setErrorHandler((err: { statusCode?: number }, _request, reply) => {
     if (err.statusCode === 400) return reply.code(400).send({ error: 9 });
@@ -279,6 +293,9 @@ export async function startFakeWled(seed: Seed, opts: FakeOpts = {}): Promise<Fa
       return state();
     },
     applyState,
+    pixels(id) {
+      return [...(sim.slots[id]?.pixels ?? [])];
+    },
     afterPost(fn) {
       afterPostFns.push(fn);
     },
@@ -290,6 +307,20 @@ export async function startFakeWled(seed: Seed, opts: FakeOpts = {}): Promise<Fa
       return closing;
     },
   };
+}
+
+/** `JSON_BUFFER_SIZE` for an `info.arch` (const.h:656-664; "ESP32-S2" from `ESP.getChipModel()`, json.cpp:853-871). */
+function docSize(arch: string): number {
+  const a = arch.toLowerCase();
+  if (a === "esp8266") return 10240;
+  return a === "esp32-s2" ? 24576 : 32767;
+}
+
+/** The values of a parsed body below its root: each takes one 16-byte ArduinoJson slot. */
+function valueCount(v: unknown): number {
+  if (Array.isArray(v)) return v.reduce((n: number, item) => n + 1 + valueCount(item), 0);
+  if (isObject(v)) return Object.values(v).reduce((n: number, item) => n + 1 + valueCount(item), 0);
+  return 0;
 }
 
 /** cfg.cpp keeps every key a write leaves out: objects merge at every depth, anything else (arrays too) replaces. */

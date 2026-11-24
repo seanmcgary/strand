@@ -1,6 +1,6 @@
 import type { RangeView, SlotView, StrandPatch } from "../../shared/apiTypes";
 import { messages } from "../errors";
-import { encodePaint, readStrand, segmentName, type Lists, type PaintMap, type Strand, type WledSeg, type WledState } from "./layoutRead";
+import { encodePaint, isInt, readStrand, segmentName, type Lists, type PaintMap, type Strand, type WledSeg, type WledState } from "./layoutRead";
 
 /**
  * Writes a strand's layout as WLED segments (spec §6.2 "Writing a layout").
@@ -36,7 +36,6 @@ const BYTE_FIELDS = ["sx", "ix", "c1", "c2", "pal"] as const;
 const SLOT_NUMBERS = ["fx", "sx", "ix", "c1", "c2", "c3", "pal"] as const;
 const SLOT_FLAGS = ["o1", "o2", "o3"] as const;
 
-const isInt = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v);
 const intIn = (v: unknown, min: number, max: number): boolean => isInt(v) && v >= min && v <= max;
 const isColor = (v: unknown): boolean => Array.isArray(v) && (v.length === 3 || v.length === 4) && v.every((c) => intIn(c, 0, 255));
 const samePattern = (a: RangeView["pattern"], b: RangeView["pattern"]): boolean =>

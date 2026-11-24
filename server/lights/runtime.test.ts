@@ -136,6 +136,20 @@ describe("startup timer", () => {
     await vi.waitFor(async () => expect((await readDeviceLights(s.deps, s.row)).view.notices).toEqual([]));
   });
 
+  // Fails if the preset is measured by its text alone: this one is short, but its values overflow the ESP8266's JSON document.
+  it("saves without paint when the paint's values do not fit the device's JSON document", async () => {
+    const s = await startLights({ startupDelayMs: 20, seed: bigSeed(16) });
+    s.f.applyState({ seg: [{ id: 0, start: 0, stop: 300, n: "Roof paint", frz: true }] });
+    const stripes = Array.from({ length: 300 }, (_, k) => (k % 2 === 0 ? "#FF0000" : "#0000FF"));
+    s.rt.rememberPaint(s.row.id, { "Roof paint": stripes });
+    s.rt.afterWrite(s.row);
+    await vi.waitFor(() => expect(psaves(s.f)).toHaveLength(1));
+    const body = psaves(s.f)[0]!.body as { seg: Record<string, unknown>[] };
+    expect(JSON.stringify(body).length).toBeLessThan(10240);
+    expect(body.seg[0]).not.toHaveProperty("i");
+    await vi.waitFor(async () => expect((await readDeviceLights(s.deps, s.row)).view.notices).toEqual([notices.paintNotSaved]));
+  });
+
   // Fails if a preset that is too large even without paint is sent, or the view does not say the setup is not kept.
   it("skips a save that is too large without paint, and says so", async () => {
     const s = await startLights({ startupDelayMs: 20, seed: bigSeed(64) });
