@@ -4,6 +4,7 @@ import fastifyStatic from "@fastify/static";
 import type { Config } from "./config";
 import { ApiError, registerErrorHandler } from "./errors";
 import { devicesRoutes } from "./routes/devices";
+import { discoveryRoutes } from "./routes/discovery";
 import { isApiRequest, registerRequestGuard } from "./requestGuard";
 import { serializeRequestForLog } from "./requestLogSerializer";
 
@@ -56,6 +57,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   registerErrorHandler(app);
 
   app.register(devicesRoutes, deps);
+  app.register(discoveryRoutes, deps);
 
   app.register(fastifyStatic, {
     root: config.webDistDir,
