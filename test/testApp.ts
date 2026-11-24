@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { onTestFinished } from "vitest";
 import type { FastifyInstance, InjectOptions, LightMyRequestResponse } from "fastify";
 import { buildApp, type AppDeps } from "../server/app";
 import { loadConfig } from "../server/config";
@@ -47,6 +48,10 @@ export function makeTestApp(
     logger: false,
   };
   const app = buildApp(deps);
+  onTestFinished(async () => {
+    await app.close();
+    db.close();
+  });
 
   return {
     app,

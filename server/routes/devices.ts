@@ -5,10 +5,8 @@ import type { AppDeps } from "../app";
 import * as devices from "../db/devices";
 import type { DeviceRow } from "../db/devices";
 import { ApiError, messages } from "../errors";
-import { deviceRequest, fetchInfo, type DeviceTarget } from "../wled/deviceClient";
+import { deviceRequest, fetchInfo, RESOLVE_TIMEOUT_MS, type DeviceTarget } from "../wled/deviceClient";
 
-/** The time limit of an mDNS lookup of a typed `.local` name. */
-const RESOLVE_TIMEOUT_MS = 1000;
 /** The lock check: page 3 of `s.js` is the smallest PIN-gated script (plan, "Verified external API"). */
 const LOCK_CHECK_PATH = "/settings/s.js?p=3";
 
@@ -20,7 +18,7 @@ const hostBody = {
 } as const;
 
 const IPV4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
-const LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+export const LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 
 /**
  * Reads what a user typed as a device address: an optional `http://` or
@@ -28,7 +26,7 @@ const LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
  * and an optional path, which is dropped. Returns `null` for anything else.
  * `defaultPort` is the port when none is typed.
  */
-export function normalizeHost(input: string, defaultPort: number): { host: string; port: number } | null {
+function normalizeHost(input: string, defaultPort: number): { host: string; port: number } | null {
   let value = input.trim().toLowerCase().replace(/^https?:\/\//, "");
   const slash = value.indexOf("/");
   if (slash !== -1) value = value.slice(0, slash);
@@ -118,7 +116,7 @@ async function probeHost(
   throw new ApiError(404, "no_device", messages.noDevice(input.trim()));
 }
 
-function toDiscovered(found: Awaited<ReturnType<typeof probeHost>>, alreadyAdded: boolean): DiscoveredDevice {
+export function toDiscovered(found: { ip: string; host: string; info: WledInfo }, alreadyAdded: boolean): DiscoveredDevice {
   const { info } = found;
   return {
     mac: info.mac,
@@ -138,17 +136,12 @@ export async function devicesRoutes(app: FastifyInstance, deps: AppDeps): Promis
     const now = deps.now();
     return Promise.all(
       rows.map(async (row): Promise<Device> => {
-        const offline = toDevice(row, { online: false, locked: false }, now);
-        try {
-          // Recovery is off so that one moved device does not slow the list.
-          const info = await fetchInfo(deps, row.lastIp, row.port);
-          if (info?.mac !== row.mac) return offline;
-          devices.recordSeen(deps.db, row.id, { name: info.name || row.name, lastIp: row.lastIp }, now);
-          const locked = await lockCheck(deps, targetOf(row), false).catch(() => false);
-          return toDevice({ ...row, name: info.name || row.name }, { online: true, locked }, now);
-        } catch {
-          return offline;
-        }
+        // Recovery is off so that one moved device does not slow the list.
+        const info = await fetchInfo(deps, row.lastIp, row.port);
+        if (info?.mac !== row.mac) return toDevice(row, { online: false, locked: false }, now);
+        devices.recordSeen(deps.db, row.id, { name: info.name || row.name, lastIp: row.lastIp }, now);
+        const locked = await lockCheck(deps, targetOf(row), false);
+        return toDevice({ ...row, name: info.name || row.name }, { online: true, locked }, now);
       }),
     );
   });
@@ -171,7 +164,7 @@ export async function devicesRoutes(app: FastifyInstance, deps: AppDeps): Promis
       now,
     );
     devices.recordSeen(deps.db, row.id, { name, lastIp: found.ip }, now);
-    const locked = await lockCheck(deps, targetOf(row), false).catch(() => false);
+    const locked = await lockCheck(deps, targetOf(row), false);
     return reply.code(201).send(toDevice(row, { online: true, locked }, now));
   });
 

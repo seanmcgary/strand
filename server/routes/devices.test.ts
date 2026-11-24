@@ -5,7 +5,6 @@ import { startFakeWled, type FakeWled } from "../../test/fakeWled";
 import { seeds } from "../../test/fixtures/seeds";
 import { makeTestApp } from "../../test/testApp";
 import * as devices from "../db/devices";
-import { normalizeHost } from "./devices";
 
 vi.mock("node:dns/promises", () => ({ lookup: vi.fn() }));
 
@@ -57,12 +56,19 @@ describe("GET /api/devices", () => {
     expect(devices.list(t.db)[0]!.name).toBe("Backyard");
   });
 
-  // Fails if the list asks devices one after another, or waits on an offline device longer than one timeout.
-  it("answers within about one timeout when a device does not reply", async () => {
-    const { t } = await listSetup();
-    const start = Date.now();
-    await t.inject({ method: "GET", url: "/api/devices" });
-    expect(Date.now() - start).toBeLessThan(2 * t.deps.config.deviceTimeoutMs + 300);
+  // Fails if the list asks devices one after another.
+  it("asks every device at once when devices do not reply", async () => {
+    const t = makeTestApp();
+    const first = await fake(seeds.backyard);
+    const second = await fake(seeds.garage);
+    t.addFake(first, seeds.backyard);
+    t.addFake(second, seeds.garage);
+    first.setMode("timeout");
+    second.setMode("timeout");
+    const pending = t.inject({ method: "GET", url: "/api/devices" });
+    await vi.waitFor(() => expect(first.requests).toHaveLength(1));
+    await vi.waitFor(() => expect(second.requests).toHaveLength(1), { timeout: t.deps.config.deviceTimeoutMs / 2 });
+    await pending;
   });
 
   // Fails if the list stops saving the name and the time of a device that answered.
@@ -72,36 +78,6 @@ describe("GET /api/devices", () => {
     await t.inject({ method: "GET", url: "/api/devices" });
     const row = devices.list(t.db)[0]!;
     expect(row).toMatchObject({ name: "Back Porch", lastSeen: "2026-11-24T12:00:00.000Z" });
-  });
-});
-
-describe("normalizeHost", () => {
-  // Fails if a prefix, case, a path or a port is handled differently from the spec.
-  it.each([
-    ["HTTP://192.168.1.42/", { host: "192.168.1.42", port: 80 }],
-    ["192.168.1.42:8080", { host: "192.168.1.42", port: 8080 }],
-    ["Wled-Backyard", { host: "wled-backyard", port: 80 }],
-    ["https://192.168.1.42", { host: "192.168.1.42", port: 80 }],
-    ["wled-backyard.local", { host: "wled-backyard.local", port: 80 }],
-  ])("accepts %s", (input, expected) => {
-    expect(normalizeHost(input, 80)).toEqual(expected);
-  });
-
-  // Fails if a value that is not an IPv4 address or a host name, or a port outside 1-65535, is accepted.
-  it.each([
-    "  ",
-    "a b",
-    "1.2.3.4?x=",
-    "user@host",
-    "host#x",
-    "[::1]",
-    "host:0",
-    "host:99999",
-    "host:ab",
-    "300.1.1.1",
-    ["a".repeat(63), "a".repeat(63), "a".repeat(63), "a".repeat(62)].join("."),
-  ])("rejects %s", (input) => {
-    expect(normalizeHost(input, 80)).toBeNull();
   });
 });
 
@@ -172,8 +148,45 @@ describe("POST /api/devices/probe", () => {
     expect(res.json()).toMatchObject({ error: "no_device" });
   });
 
+  // Fails if a prefix, a path or a case difference in what was typed changes the host or port that is probed.
+  it.each(["HTTP://127.0.0.1:PORT/", "https://127.0.0.1:PORT/a/b"])("reads the address %s", async (typed) => {
+    const t = makeTestApp();
+    const f = await fake(seeds.backyard);
+    const res = await t.inject({
+      method: "POST",
+      url: "/api/devices/probe",
+      payload: { host: typed.replace("PORT", String(f.port)) },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ host: "127.0.0.1", ip: "127.0.0.1" });
+  });
+
+  // Fails if a reply without the LED count is accepted as a device, which would make the details throw.
+  it("returns no_device when the reply has no leds", async () => {
+    const t = makeTestApp();
+    const f = await fake(seeds.backyard, { infoOverride: { leds: undefined } });
+    const res = await t.inject({ method: "POST", url: "/api/devices/probe", payload: { host: `127.0.0.1:${f.port}` } });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ error: "no_device" });
+  });
+
   // Fails if a body that is not exactly { host: string } with a valid address reaches the handler or is coerced.
-  it.each([{ host: "a b" }, {}, { host: 5 }, { host: "127.0.0.1", extra: 1 }])("rejects the body %j", async (payload) => {
+  it.each([
+    { host: "a b" },
+    {},
+    { host: 5 },
+    { host: "127.0.0.1", extra: 1 },
+    { host: "  " },
+    { host: "1.2.3.4?x=" },
+    { host: "user@host" },
+    { host: "host#x" },
+    { host: "[::1]" },
+    { host: "host:0" },
+    { host: "host:99999" },
+    { host: "host:ab" },
+    { host: "300.1.1.1" },
+    { host: ["a".repeat(63), "a".repeat(63), "a".repeat(63), "a".repeat(62)].join(".") },
+  ])("rejects the body %j", async (payload) => {
     const t = makeTestApp();
     const res = await t.inject({ method: "POST", url: "/api/devices/probe", payload });
     expect(res.statusCode).toBe(400);

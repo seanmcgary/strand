@@ -22,7 +22,7 @@ type DeviceRequestInit = {
 /** The largest device reply the server reads. */
 const MAX_REPLY_BYTES = 1024 * 1024;
 /** The time limit of the mDNS lookup during address recovery. */
-const RESOLVE_TIMEOUT_MS = 1000;
+export const RESOLVE_TIMEOUT_MS = 1000;
 
 // Node fetch (undici) puts the network error code on `err.cause.code`. A
 // dropped connection means the device is busy. Every other failure (a timeout,
@@ -148,7 +148,7 @@ export async function deviceRequest<T>(
 
 /**
  * Reads `/json/info` at an address. Returns `null` when nothing answers, or
- * when the reply is not from WLED (`brand`, `mac` and `ver` are checked).
+ * when the reply is not from WLED (`brand`, `mac`, `ver` and `leds.count` are checked).
  */
 export async function fetchInfo(deps: AppDeps, ip: string, port: number): Promise<WledInfo | null> {
   let info: Partial<WledInfo> & { brand?: unknown };
@@ -161,8 +161,11 @@ export async function fetchInfo(deps: AppDeps, ip: string, port: number): Promis
   if (info.brand !== "WLED") return null;
   if (typeof info.mac !== "string" || !/^[0-9a-f]{12}$/.test(info.mac)) return null;
   if (typeof info.ver !== "string" || info.ver === "") return null;
+  const leds: unknown = info.leds;
+  if (typeof leds !== "object" || leds === null || typeof (leds as { count?: unknown }).count !== "number") return null;
   const name = typeof info.name === "string" ? info.name.slice(0, 64) : "";
-  return { ...(info as WledInfo), name };
+  const arch = typeof info.arch === "string" ? info.arch : "";
+  return { ...(info as WledInfo), name, arch };
 }
 
 /** Whether `ip` is a dotted IPv4 address in 10/8, 172.16/12, 192.168/16, 169.254/16 or 127/8. */

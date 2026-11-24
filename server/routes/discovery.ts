@@ -3,7 +3,7 @@ import type { DiscoveredDevice } from "../../shared/apiTypes";
 import type { AppDeps } from "../app";
 import * as devices from "../db/devices";
 import { deviceRequest, fetchInfo, isPrivateIpv4 } from "../wled/deviceClient";
-import { targetOf } from "./devices";
+import { LABEL, targetOf, toDiscovered } from "./devices";
 
 /** The most addresses one discovery request sends `/json/info` to. */
 const MAX_CANDIDATES = 64;
@@ -34,7 +34,7 @@ async function mdnsHostOf(deps: AppDeps, ip: string, port: number): Promise<stri
       { recover: false },
     );
     const name = cfg?.id?.mdns;
-    return typeof name === "string" && name !== "" ? `${name}.local` : null;
+    return typeof name === "string" && LABEL.test(name) ? `${name}.local` : null;
   } catch {
     return null;
   }
@@ -43,7 +43,7 @@ async function mdnsHostOf(deps: AppDeps, ip: string, port: number): Promise<stri
 export async function discoveryRoutes(app: FastifyInstance, deps: AppDeps): Promise<void> {
   app.get("/api/discovery", async (): Promise<DiscoveredDevice[]> => {
     const [services, nodes] = await Promise.all([
-      deps.mdns.browseWled(deps.config.discoveryWindowMs).catch(() => []),
+      deps.mdns.browseWled(deps.config.discoveryWindowMs),
       nodeCandidates(deps),
     ]);
 
@@ -75,19 +75,12 @@ export async function discoveryRoutes(app: FastifyInstance, deps: AppDeps): Prom
     }
 
     const now = deps.now();
-    return [...byMac.values()].map(({ ip, host, info }) => {
+    return [...byMac.values()]
+    .map(({ ip, host, info }) => {
       const saved = devices.getByMac(deps.db, info.mac);
       if (saved && saved.lastIp !== ip) devices.setLastIp(deps.db, saved.id, ip, now);
-      return {
-        mac: info.mac,
-        name: info.name,
-        ip,
-        host,
-        ver: info.ver,
-        ledCount: info.leds.count,
-        arch: info.arch,
-        alreadyAdded: saved !== undefined,
-      };
-    });
+      return toDiscovered({ ip, host, info }, saved !== undefined);
+    })
+    .sort((a, b) => a.name.localeCompare(b.name) || a.mac.localeCompare(b.mac));
   });
 }

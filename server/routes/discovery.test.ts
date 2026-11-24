@@ -33,7 +33,7 @@ function spyFetch() {
 }
 
 describe("GET /api/discovery", () => {
-  // Fails if alreadyAdded is not read from the devices table, or host is not the mDNS name.
+  // Fails if alreadyAdded is not read from the devices table, host is not the mDNS name, or the list is not sorted by name.
   it("returns found devices and marks the saved one", async () => {
     const garage = await fake(seeds.garage);
     const backyard = await fake(seeds.backyard);
@@ -47,8 +47,8 @@ describe("GET /api/discovery", () => {
     const res = await t.inject({ method: "GET", url: "/api/discovery" });
     const list = res.json<DiscoveredDevice[]>();
     expect(list.map((d) => [d.name, d.host, d.alreadyAdded])).toEqual([
-      ["Garage", "wled-garage.local", false],
       ["Backyard", "wled-backyard.local", true],
+      ["Garage", "wled-garage.local", false],
     ]);
   });
 
@@ -119,6 +119,17 @@ describe("GET /api/discovery", () => {
   it("uses the IP as host when the device has no mDNS name", async () => {
     const garage = await fake(seeds.garage);
     (garage.cfg.id as { mdns: string }).mdns = "";
+    const backyard = await fake(seeds.backyard, { nodes: [{ ip: "127.0.0.1" }] });
+    const t = makeTestApp({ wledPort: garage.port });
+    t.addFake(backyard, seeds.backyard);
+    const list = (await t.inject({ method: "GET", url: "/api/discovery" })).json<DiscoveredDevice[]>();
+    expect(list[0]).toMatchObject({ name: "Garage", host: "127.0.0.1" });
+  });
+
+  // Fails if an id.mdns that is not a host name label is sent to the browser as host.
+  it("uses the IP as host when the device's mDNS name is not a valid label", async () => {
+    const garage = await fake(seeds.garage);
+    (garage.cfg.id as { mdns: string }).mdns = "bad name!";
     const backyard = await fake(seeds.backyard, { nodes: [{ ip: "127.0.0.1" }] });
     const t = makeTestApp({ wledPort: garage.port });
     t.addFake(backyard, seeds.backyard);
