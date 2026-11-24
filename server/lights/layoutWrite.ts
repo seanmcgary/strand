@@ -1,6 +1,6 @@
 import type { RangeView, SlotView, StrandPatch } from "../../shared/apiTypes";
 import { messages } from "../errors";
-import { encodePaint, isInt, readStrand, segmentName, type Lists, type PaintMap, type Strand, type WledSeg, type WledState } from "./layoutRead";
+import { encodePaint, FLASH_NAME, isInt, readStrand, segmentName, type Lists, type PaintMap, type Strand, type WledSeg, type WledState } from "./layoutRead";
 
 /**
  * Writes a strand's layout as WLED segments (spec §6.2 "Writing a layout").
@@ -243,10 +243,34 @@ export function segmentsNeeded(state: WledState, strand: Strand, next: StrandPat
 }
 
 /**
- * The requests that give `strand` the content `next`. New segments take the
- * removed IDs first (as overwrites), then the unlisted IDs below the highest
- * listed one, then the IDs above it. Deletes go first, split so the firmware
- * never purges and renumbers (`json.cpp:488`); everything else goes in the last request.
+ * The requests of a write. New segments take the removed IDs first (as overwrites), then the unlisted IDs
+ * below the highest listed one, then the IDs above it. Deletes go first, split so the firmware never
+ * purges and renumbers (`json.cpp:488`); everything else goes in the last request.
+ */
+function requestsFor(state: WledState, removedIds: number[], creates: Body[], patches: SegPatch[]): SegPatch[][] {
+  const listed = new Set(state.seg.map((s) => s.id));
+  const maxListed = Math.max(-1, ...listed);
+  const removed = [...removedIds].sort((a, b) => a - b);
+  const pool = [...removed];
+  for (let id = 0; id < maxListed && pool.length < creates.length; id++) if (!listed.has(id)) pool.push(id);
+  for (let id = maxListed + 1; pool.length < creates.length; id++) pool.push(id);
+  const assigned = creates.map((body, k) => ({ id: pool[k]!, ...body }));
+  const deletes = removed.slice(creates.length).map((id) => ({ id, stop: 0 }));
+
+  // The firmware purges when a request deletes at least half of a vector of more than 3 slots, and
+  // the vector has at least `sizeMin` slots. (With `sizeMin` ≤ 3 a purge can only drop empty slots after the last segment.)
+  const sizeMin = Math.max(maxListed, ...assigned.map((a) => a.id)) + 1;
+  const perRequest = sizeMin > 3 ? Math.floor(sizeMin / 2) - 1 : Infinity;
+  const last = [...assigned, ...patches].sort((a, b) => a.id - b.id);
+  const requests: SegPatch[][] = [];
+  for (let k = 0; k < deletes.length; k += perRequest) requests.push(deletes.slice(k, k + perRequest));
+  if (requests.length > 0) requests[requests.length - 1]!.push(...last);
+  else if (last.length > 0) requests.push(last);
+  return requests;
+}
+
+/**
+ * The requests that give `strand` the content `next`; see `requestsFor` for their order.
  */
 export function writeStrand(
   state: WledState,
@@ -262,23 +286,28 @@ export function writeStrand(
   const free = maxseg - state.seg.length;
   if (need > free) throw new LayoutError("segment_budget", messages.segmentBudget(need, free), { need, free });
 
-  const listed = new Set(state.seg.map((s) => s.id));
-  const maxListed = Math.max(-1, ...listed);
-  const removed = [...p.removed].sort((a, b) => a - b);
-  const pool = [...removed];
-  for (let id = 0; id < maxListed && pool.length < p.creates.length; id++) if (!listed.has(id)) pool.push(id);
-  for (let id = maxListed + 1; pool.length < p.creates.length; id++) pool.push(id);
-  const assigned = p.creates.map((body, k) => ({ id: pool[k]!, ...body }));
-  const deletes = removed.slice(p.creates.length).map((id) => ({ id, stop: 0 }));
+  return { seg: requestsFor(state, p.removed, p.creates, p.patches), paint: p.paint };
+}
 
-  // The firmware purges when a request deletes at least half of a vector of more than 3 slots, and
-  // the vector has at least `sizeMin` slots. (With `sizeMin` ≤ 3 a purge can only drop empty slots after the last segment.)
-  const sizeMin = Math.max(maxListed, ...assigned.map((a) => a.id)) + 1;
-  const perRequest = sizeMin > 3 ? Math.floor(sizeMin / 2) - 1 : Infinity;
-  const last = [...assigned, ...p.patches].sort((a, b) => a.id - b.id);
-  const requests: SegPatch[][] = [];
-  for (let k = 0; k < deletes.length; k += perRequest) requests.push(deletes.slice(k, k + perRequest));
-  if (requests.length > 0) requests[requests.length - 1]!.push(...last);
-  else if (last.length > 0) requests.push(last);
-  return { seg: requests, paint: p.paint };
+
+const overlapsSpan = (s: { start: number; stop: number }, o: { start: number; len: number }): boolean => s.start < o.start + o.len && o.start < s.stop;
+const SLOT_KEYS = ["on", "bri", "col", "fx", "sx", "ix", "c1", "c2", "c3", "o1", "o2", "o3", "pal"] as const;
+
+/**
+ * Gives each of `touched` (strands that share a segment, in LED order) a segment of its own, in one request.
+ * The first crossing segment becomes the first strand's All range "Range 1"; every other strand gets a new
+ * segment with the same slot; every other segment on these strands is deleted.
+ */
+export function splitShared(state: WledState, touched: Strand[], maxseg: number): LayoutWrite {
+  const near = state.seg.filter((s) => s.n !== FLASH_NAME && touched.some((t) => overlapsSpan(s, t)));
+  const inside = (s: WledSeg): boolean => touched.some((t) => s.start >= t.start && s.stop <= t.start + t.len);
+  const first = near.filter((s) => !inside(s)).sort((a, b) => a.id - b.id)[0] ?? near[0]!;
+  const removed = near.filter((s) => s.id !== first.id).map((s) => s.id);
+  const slot = Object.fromEntries(SLOT_KEYS.map((k) => [k, first[k]]));
+  const bodyOf = (t: Strand): Body => ({ ...slot, start: t.start, stop: t.start + t.len, grp: 1, spc: 0, of: 0, rev: false, mi: false, frz: false, n: "Range 1" });
+  const creates = touched.slice(1).map(bodyOf);
+  const need = creates.length - removed.length;
+  const free = maxseg - state.seg.length;
+  if (need > free) throw new LayoutError("segment_budget", messages.segmentBudget(need, free), { need, free });
+  return { seg: requestsFor(state, removed, creates, [{ id: first.id, ...bodyOf(touched[0]!) }]), paint: [] };
 }

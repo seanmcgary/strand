@@ -1,15 +1,16 @@
 import { afterEach, describe, expect, it } from "vitest";
-import type { LightsView } from "../../shared/apiTypes";
+import type { LightsView, RangeView } from "../../shared/apiTypes";
 import { startFakeWled, type FakeWled } from "../../test/fakeWled";
 import { seeds, type Seed } from "../../test/fixtures/seeds";
 import { makeTestApp } from "../../test/testApp";
 import * as strandGroups from "../db/strandGroups";
 import { encodePaint, FLASH_NAME } from "../lights/layoutRead";
+import { psaves } from "../../test/lightsRuntime";
 
 const fakes: FakeWled[] = [];
 
-async function setup(seed: Seed = seeds.backyard, opts: { flashMs?: number; infoOverride?: object } = {}) {
-  const t = makeTestApp({ flashMs: opts.flashMs });
+async function setup(seed: Seed = seeds.backyard, opts: { flashMs?: number; startupDelayMs?: number; infoOverride?: object } = {}) {
+  const t = makeTestApp({ flashMs: opts.flashMs, startupDelayMs: opts.startupDelayMs });
   const f = await startFakeWled(seed, { infoOverride: opts.infoOverride });
   fakes.push(f);
   const row = t.addFake(f, seed);
@@ -214,5 +215,203 @@ describe("POST lights/flash", () => {
       message: "This needs 1 more segment and 0 are free. Remove a range first.",
       need: 1,
     });
+  });
+});
+
+type Segs = { id: number; n?: string; start: number; stop: number; grp: number; spc: number; col: number[][]; fx: number; pal: number; bri: number }[];
+const segsOf = (f: FakeWled) => f.state.seg as unknown as Segs;
+
+describe("strand edit and resolve", () => {
+  const strand = (s: Awaited<ReturnType<typeof setup>>, key = "o0") =>
+    s.t.inject({ method: "GET", url: s.url("lights") }).then((res) => res.json<LightsView>().strands.find((v) => v.key === key)!);
+  const patch = (s: Awaited<ReturnType<typeof setup>>, payload: unknown, key = "o0") =>
+    s.t.inject({ method: "PATCH", url: s.url(`lights/strands/${key}`), payload: payload as object });
+  const resolve = (s: Awaited<ReturnType<typeof setup>>, action: string) =>
+    s.t.inject({ method: "POST", url: s.url("lights/strands/o0/resolve"), payload: { action } });
+  const splitSeed = (f: FakeWled) => f.applyState({ seg: [seg(0, "Range 1", 0, 150), seg(1, "Range 1", 150, 300)] });
+  const all = (base: RangeView, name: string, start: number, len: number): RangeView => ({ ...base, name, start, len, pattern: { kind: "all" }, slots: [base.slots[0]!] });
+
+  // Fails if the route is missing, or a ranges edit on a shared strand is not refused with 409 shared.
+  it("refuses a ranges edit on a shared strand", async () => {
+    const s = await setup();
+    const base = (await strand(s)).ranges[0]!;
+    const res = await patch(s, { ranges: [all(base, "A", 0, 75), all(base, "B", 75, 75)] });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({
+      error: "shared",
+      message: "Strand 1 shares a segment with another strand. Choose Split or Combine on the Lights tab first.",
+    });
+    expect(posts(s.f)).toEqual([]);
+  });
+
+  // Fails if a bri edit on a shared strand is not written to its shared segment.
+  it("writes bri to the shared segment", async () => {
+    const s = await setup();
+    const res = await patch(s, { bri: 90 });
+    expect(res.statusCode).toBe(200);
+    expect(segsOf(s.f)[0]!.bri).toBe(90);
+  });
+
+  // Fails if resolve split does not give each strand its own segment with the old slot.
+  it("split gives each strand a Range 1 with the old slot", async () => {
+    const s = await setup();
+    const before = segsOf(s.f)[0]!;
+    const res = await resolve(s, "split");
+    expect(res.statusCode).toBe(200);
+    const after = segsOf(s.f).map((g) => ({ ...g }));
+    expect(after.map((g) => [g.start, g.stop, g.n])).toEqual([[0, 150, "Range 1"], [150, 300, "Range 1"]]);
+    for (const g of after) expect(g).toMatchObject({ col: before.col, fx: before.fx, pal: before.pal, grp: 1, spc: 0 });
+    expect(res.json<LightsView>().strands.map((v) => v.shared)).toEqual([undefined, undefined]);
+  });
+
+  // Fails if resolve combine writes to the device or does not save the group.
+  it("combine saves the group and sends nothing", async () => {
+    const s = await setup();
+    const res = await resolve(s, "combine");
+    expect(strandGroups.list(s.t.db, s.row.id)).toEqual(["o0+o1"]);
+    const view = res.json<LightsView>();
+    expect(view.strands.map((v) => [v.key, v.ranges.length, v.ranges[0]!.pattern])).toEqual([["o0+o1", 1, { kind: "all" }]]);
+    expect(posts(s.f)).toEqual([]);
+  });
+
+  // Fails if resolve on a strand that is not shared does anything but answer the view.
+  it("resolve on an unshared strand answers the view", async () => {
+    const s = await setup();
+    splitSeed(s.f);
+    const res = await resolve(s, "split");
+    expect(res.statusCode).toBe(200);
+    expect(posts(s.f)).toEqual([]);
+  });
+
+  // Fails if the edit does not write the ranges as sent, or touches the other strand's segment.
+  it("writes two ranges to a split strand and leaves the other strand alone", async () => {
+    const s = await setup(seeds.backyard, { startupDelayMs: 50 });
+    await resolve(s, "split");
+    await sleep(150);
+    s.f.requests.length = 0;
+    const base = (await strand(s)).ranges[0]!;
+    const other = segsOf(s.f).find((g) => g.start === 150)!;
+    const before = { ...other };
+    const ranges: RangeView[] = [
+      all(base, "A", 0, 75),
+      { ...base, name: "B", start: 75, len: 75, pattern: { kind: "every", n: 2, group: 1 }, slots: [base.slots[0]!, base.slots[0]!] },
+    ];
+    const res = await patch(s, { ranges });
+    expect(res.statusCode).toBe(200);
+    expect(res.json<LightsView>().strands[0]!.ranges).toEqual(ranges);
+    expect(segsOf(s.f).find((g) => g.id === before.id)).toEqual(before);
+    await sleep(200);
+    expect(psaves(s.f)).toHaveLength(1);
+  });
+
+  // Fails if validation of an Every pattern is skipped before the write.
+  it("answers 422 invalid_layout for an Every pattern wider than its range, with no write", async () => {
+    const s = await setup();
+    await resolve(s, "split");
+    const base = (await strand(s)).ranges[0]!;
+    const bad: RangeView = { ...base, name: "Tiny", start: 146, len: 4, pattern: { kind: "every", n: 3, group: 2 }, slots: [base.slots[0]!, base.slots[0]!, base.slots[0]!] };
+    s.f.requests.length = 0;
+    const res = await patch(s, { ranges: [all(base, "A", 0, 146), bad] });
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toMatchObject({ error: "invalid_layout" });
+    expect(posts(s.f)).toEqual([]);
+  });
+
+  // Fails if the endpoint does not turn a segment_budget LayoutError into 422 with need.
+  it("answers 422 segment_budget when the layout needs more segments than are free", async () => {
+    const s = await setup();
+    const small = Array.from({ length: 30 }, (_, k) => seg(k + 1, `S${k}`, 150 + k * 5, 155 + k * 5));
+    s.f.applyState({ seg: [seg(0, "Range 1", 0, 150), ...small] });
+    const base = (await strand(s)).ranges[0]!;
+    const res = await patch(s, { ranges: [all(base, "A", 0, 50), all(base, "B", 50, 50), all(base, "C", 100, 50)] });
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toEqual({ error: "segment_budget", message: "This needs 2 more segments and 1 is free. Remove a range first.", need: 2 });
+  });
+
+  // Fails if the body schema does not reject these.
+  it.each([[{}], [{ ranges: "x" }], [{ bri: 0 }], [{ on: true, x: 1 }], [{ ranges: [{ x: 1 }] }]])("rejects %j with 400", async (payload) => {
+    const s = await setup();
+    const res = await patch(s, payload);
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error: "invalid_request" });
+  });
+
+  // Fails if the RangeView schema lets a slot carry an extra key.
+  it("rejects a slot with an extra key", async () => {
+    const s = await setup();
+    await resolve(s, "split");
+    const base = (await strand(s)).ranges[0]!;
+    const res = await patch(s, { ranges: [{ ...base, slots: [{ ...base.slots[0]!, extra: 1 }] }] });
+    expect(res.statusCode).toBe(400);
+  });
+
+  // Fails if the edit leaves a foreign grp 3 segment as it is.
+  it("overwrites a segment with a foreign grp on the first edit", async () => {
+    const s = await setup();
+    s.f.applyState({ seg: [seg(0, "Range 1", 0, 150, { grp: 3 }), seg(1, "Range 1", 150, 300)] });
+    const base = (await strand(s)).ranges[0]!;
+    const res = await patch(s, { ranges: [all(base, "Range 1", 0, 150)] });
+    expect(res.statusCode).toBe(200);
+    expect(segsOf(s.f).find((g) => g.start === 0)).toMatchObject({ grp: 1, spc: 0 });
+  });
+
+  // Fails if a failed write does not schedule the startup save, or hides the device error.
+  it("answers 504 after a write fails part-way and still schedules the startup save", async () => {
+    const s = await setup(seeds.backyard, { startupDelayMs: 50 });
+    s.f.applyState({ seg: [...Array.from({ length: 8 }, (_, k) => seg(k, `S${k}`, k * 18, k === 7 ? 150 : k * 18 + 18)), seg(8, "Range 1", 150, 300)] });
+    const base = (await strand(s)).ranges[0]!;
+    s.f.failNext("timeout", { method: "POST", path: "/json/state", skip: 2 });
+    const res = await patch(s, { ranges: [all(base, "Range 1", 0, 150)] });
+    expect(res.statusCode).toBe(504);
+    expect(res.json()).toMatchObject({ error: "device_offline" });
+    expect(posts(s.f).length).toBeGreaterThanOrEqual(3);
+    await sleep(200);
+    expect(psaves(s.f)).toHaveLength(1);
+  });
+
+  const paintRange = (base: RangeView, len: number, colors: string[]): RangeView => ({ ...base, name: "Paint", start: 0, len, pattern: { kind: "individual" }, paint: colors });
+
+  // Fails if a failed paint request is not answered 504, or does not schedule the startup save.
+  it("answers 504 when the paint request fails, with the segments on the device", async () => {
+    const s = await setup(seeds.backyard, { startupDelayMs: 50 });
+    await resolve(s, "split");
+    await sleep(150);
+    s.f.requests.length = 0;
+    const base = (await strand(s)).ranges[0]!;
+    s.f.failNext("timeout", { method: "POST", path: "/json/state", skip: 1 });
+    const res = await patch(s, { ranges: [paintRange(base, 150, Array.from({ length: 150 }, () => "#00FF00"))] });
+    expect(res.statusCode).toBe(504);
+    expect(segsOf(s.f).find((g) => g.n === "Paint paint")).toBeDefined();
+    await sleep(200);
+    expect(psaves(s.f)).toHaveLength(1);
+  });
+
+  // Fails if the paint step does not find its segment by name and answer 409 when it has gone.
+  it("answers 409 strand_changed when the paint segment is gone", async () => {
+    const s = await setup();
+    await resolve(s, "split");
+    const base = (await strand(s)).ranges[0]!;
+    s.f.afterPost(() => s.f.applyState({ seg: [{ id: 0, n: "Other" }] }));
+    const res = await patch(s, { ranges: [paintRange(base, 150, Array.from({ length: 150 }, () => "#00FF00"))] });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: "strand_changed" });
+  });
+
+  // Fails if the largest paint is not split into requests the device accepts, or the startup save is refused.
+  it("writes 300 different paint colors in requests of at most 256 runs", async () => {
+    const s = await setup(seeds.frontRoof, { startupDelayMs: 50 });
+    s.f.applyState({ seg: [seg(0, "Range 1", 0, 300)] });
+    const base = (await strand(s)).ranges[0]!;
+    const colors = Array.from({ length: 300 }, () => `#${Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, "0").toUpperCase()}`);
+    const res = await patch(s, { ranges: [paintRange(base, 300, colors)] });
+    expect(res.statusCode).toBe(200);
+    const id = segsOf(s.f).find((g) => g.n === "Paint paint")!.id;
+    const paintPosts = posts(s.f).filter((r) => (r.body as { seg?: { i?: unknown[] } }).seg?.i !== undefined);
+    expect(paintPosts.length).toBeGreaterThan(0);
+    for (const r of paintPosts) expect(((r.body as { seg: { i: unknown[] } }).seg.i).length).toBeLessThanOrEqual(256 * 3);
+    expect(posts(s.f).every((r) => r.body !== undefined)).toBe(true);
+    expect(s.f.pixels(id).map((c) => c?.toUpperCase())).toEqual(colors);
+    await sleep(200);
+    expect(psaves(s.f)).toHaveLength(1);
   });
 });
