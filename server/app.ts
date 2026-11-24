@@ -11,6 +11,7 @@ import { preferencesRoutes } from "./routes/preferences";
 import { settingsRoutes } from "./routes/settings";
 import { isApiRequest, registerRequestGuard } from "./requestGuard";
 import { serializeRequestForLog } from "./requestLogSerializer";
+import { createLightsRuntime, type LightsRuntime } from "./lights/runtime";
 
 /** Everything `buildApp` needs. Tests replace mDNS, the clock and the database. */
 export interface AppDeps {
@@ -28,25 +29,36 @@ export interface AppDeps {
    * always applied.
    */
   logger?: FastifyServerOptions["logger"];
+  /** How long a flash LED stays lit (spec §6.6). Defaults to 3000. */
+  flashMs?: number;
+  /** The wait after the last Lights write before the startup preset is saved (spec §6.7). Defaults to 5000. */
+  startupDelayMs?: number;
 }
+
+/** What every route plugin gets: the dependencies with their defaults, and the lights runtime. */
+export type ServerDeps = AppDeps & { flashMs: number; startupDelayMs: number; lights: LightsRuntime };
 
 /**
  * Builds the server: the `/api` guard, the API routes, the built frontend,
  * and `index.html` for every other GET so that browser routes load the app.
  * Sync on purpose: tests use the returned app without awaiting.
  */
-export function buildApp(deps: AppDeps): FastifyInstance {
-  const { config } = deps;
+export function buildApp(appDeps: AppDeps): FastifyInstance {
+  const { config } = appDeps;
   const app = Fastify({
     logger:
-      deps.logger === false
+      appDeps.logger === false
         ? false
-        : { ...(typeof deps.logger === "object" ? deps.logger : {}), serializers: { req: serializeRequestForLog } },
+        : { ...(typeof appDeps.logger === "object" ? appDeps.logger : {}), serializers: { req: serializeRequestForLog } },
     bodyLimit: 32768,
     // Fastify's default Ajv coerces types and strips unknown properties, so a
     // schema alone would accept `{ host: 5 }` and `{ host, extra }`.
     ajv: { customOptions: { coerceTypes: false, removeAdditional: false } },
   });
+
+  const timing = { flashMs: appDeps.flashMs ?? 3000, startupDelayMs: appDeps.startupDelayMs ?? 5000 };
+  const deps: ServerDeps = { ...appDeps, ...timing, lights: createLightsRuntime({ ...appDeps, ...timing }, app.log) };
+  app.addHook("onClose", async () => deps.lights.close());
 
   // `/api` takes JSON bodies only.
   app.removeContentTypeParser("text/plain");

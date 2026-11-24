@@ -27,6 +27,9 @@ export function makeTestApp(
     now?: () => Date;
     wledPort?: number;
     allowedHosts?: string[] | "*";
+    /** Both default to 60 s, so no other test sees a timer fire. */
+    flashMs?: number;
+    startupDelayMs?: number;
   } = {},
 ): TestApp {
   const db = openDb(":memory:");
@@ -46,6 +49,8 @@ export function makeTestApp(
     wledPort: opts.wledPort ?? 80,
     scanDelayMs: 1,
     logger: false,
+    flashMs: opts.flashMs ?? 60_000,
+    startupDelayMs: opts.startupDelayMs ?? 60_000,
   };
   const app = buildApp(deps);
   onTestFinished(async () => {

@@ -29,7 +29,7 @@ docker compose up   # network_mode: host; data in ./data
 
 ## Stack
 
-One TypeScript package copied from the frontend of `~/Code/app-template`: React 19 + Vite + Tailwind v4 + shadcn/ui, client-side rendered, served by the template's Fastify serving tier, which is also the whole backend (no Go service). SQLite (`node:sqlite`) for storage; Docker for deployment (`network_mode: host`, data volume at `/data`). The server keeps no state that must survive a restart. It may hold short in-memory timers: the 3-second LED flash and the 5-second startup-preset write. It talks to devices only over HTTP (no WebSockets).
+One TypeScript package copied from the frontend of `~/Code/app-template`: React 19 + Vite + Tailwind v4 + shadcn/ui, client-side rendered, served by the template's Fastify serving tier, which is also the whole backend (no Go service). SQLite (`node:sqlite`) for storage; Docker for deployment (`network_mode: host`, data volume at `/data`). The server keeps no state that must survive a restart. It may hold short in-memory timers (the 3-second LED flash and the 5-second startup-preset write) and, per device, the paint it last sent; see CONVENTIONS.md §5. It talks to devices only over HTTP (no WebSockets).
 
 ## Architecture constraints
 

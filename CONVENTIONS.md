@@ -50,7 +50,7 @@ There is no `NODE_ENV` branch anywhere, and none should be added. The dev loop r
 - Requests to devices go through `server/wled/deviceClient.ts` only.
 - `server/requestGuard.ts` guards `/api`: the Host allow-list (`ALLOWED_HOSTS`) and the `X-Strand-Request: 1` header on writes.
 - Never log a request body or a PIN. The request log serializer logs the method and the path only.
-- The server keeps no device state, connection or queue in memory between requests.
+- The server keeps no state that must survive a restart. `server/lights/runtime.ts` holds the only in-memory state: the 3-second flash timer, the 5-second startup-preset timer, and the paint it last sent, per device.
 
 ## 6. Migrations
 
