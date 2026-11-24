@@ -1,4 +1,5 @@
 import type {
+  ApiErrorBody,
   Capabilities,
   ConfigPatch,
   Device,
@@ -26,7 +27,7 @@ export class ApiError extends Error {
   }
 }
 
-function isErrorBody(body: unknown): body is { error: ErrorCode; message: string } {
+function isErrorBody(body: unknown): body is ApiErrorBody {
   return (
     typeof body === "object" &&
     body !== null &&
@@ -50,7 +51,9 @@ export async function request<T>(method: string, path: string, body?: unknown): 
     if (isErrorBody(parsed)) throw new ApiError(response.status, parsed.error, parsed.message)
     throw new ApiError(response.status, "device_error", "The server sent an unexpected reply.")
   }
-  return (await response.json()) as T
+  const parsed: unknown = await response.json().catch(() => undefined)
+  if (parsed === undefined) throw new ApiError(response.status, "device_error", "The server sent an unexpected reply.")
+  return parsed as T
 }
 
 const device = (id: string) => `/api/devices/${encodeURIComponent(id)}`

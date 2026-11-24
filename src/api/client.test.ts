@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
+import { makeTestApp } from "../../test/testApp"
 import { api, ApiError, request } from "./client"
 
-function stubFetch(response: Response) {
-  const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => response)
+function stubFetch(response: Response | (() => Response)) {
+  const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => (typeof response === "function" ? response() : response))
   vi.stubGlobal("fetch", fetchMock)
   return fetchMock
 }
@@ -15,41 +16,59 @@ afterEach(() => {
 })
 
 describe("api", () => {
-  const cases: [string, () => Promise<unknown>, string, string, unknown][] = [
-    ["listDevices", () => api.listDevices(), "GET", "/api/devices", undefined],
-    ["discover", () => api.discover(), "GET", "/api/discovery", undefined],
-    ["probeHost", () => api.probeHost("wled.local"), "POST", "/api/devices/probe", { host: "wled.local" }],
-    ["addDevice", () => api.addDevice("wled.local"), "POST", "/api/devices", { host: "wled.local" }],
-    ["removeDevice", () => api.removeDevice("a/b"), "DELETE", "/api/devices/a%2Fb", undefined],
-    ["getInfo", () => api.getInfo("a/b"), "GET", "/api/devices/a%2Fb/info", undefined],
-    ["getState", () => api.getState("a/b"), "GET", "/api/devices/a%2Fb/state", undefined],
-    ["patchState", () => api.patchState("a/b", { on: true, bri: 9 }), "PATCH", "/api/devices/a%2Fb/state", { on: true, bri: 9 }],
-    ["getConfig", () => api.getConfig("a/b"), "GET", "/api/devices/a%2Fb/config", undefined],
-    ["patchConfig", () => api.patchConfig("a/b", { def: { on: true } }), "PATCH", "/api/devices/a%2Fb/config", { def: { on: true } }],
-    ["unlock", () => api.unlock("a/b", "1234"), "POST", "/api/devices/a%2Fb/unlock", { pin: "1234" }],
-    ["getCapabilities", () => api.getCapabilities("a/b"), "GET", "/api/devices/a%2Fb/capabilities", undefined],
-    ["getPins", () => api.getPins("a/b"), "GET", "/api/devices/a%2Fb/pins", undefined],
-    ["scanNetworks", () => api.scanNetworks("a/b"), "POST", "/api/devices/a%2Fb/networks/scan", undefined],
-    ["reboot", () => api.reboot("a/b"), "POST", "/api/devices/a%2Fb/reboot", undefined],
-    ["getPendingReboot", () => api.getPendingReboot("a/b"), "GET", "/api/devices/a%2Fb/pending-reboot", undefined],
-    ["getEffects", () => api.getEffects("a/b"), "GET", "/api/devices/a%2Fb/effects", undefined],
-    ["getPalettes", () => api.getPalettes("a/b"), "GET", "/api/devices/a%2Fb/palettes", undefined],
-    ["getPreferences", () => api.getPreferences(), "GET", "/api/preferences", undefined],
-    ["putPreference", () => api.putPreference("k.1", { a: 1 }), "PUT", "/api/preferences/k.1", { value: { a: 1 } }],
-  ]
+  // Fails if a client function calls a path or method the server does not serve.
+  it("calls only routes the server serves", async () => {
+    const t = makeTestApp()
+    await t.app.ready()
+    const fetchMock = stubFetch(() => json({}))
+    const calls: Promise<unknown>[] = [
+      api.listDevices(),
+      api.discover(),
+      api.probeHost("wled.local"),
+      api.addDevice("wled.local"),
+      api.removeDevice("dev1"),
+      api.getInfo("dev1"),
+      api.getState("dev1"),
+      api.patchState("dev1", { on: true }),
+      api.getConfig("dev1"),
+      api.patchConfig("dev1", { def: { on: true } }),
+      api.unlock("dev1", "1234"),
+      api.getCapabilities("dev1"),
+      api.getPins("dev1"),
+      api.scanNetworks("dev1"),
+      api.reboot("dev1"),
+      api.getPendingReboot("dev1"),
+      api.getEffects("dev1"),
+      api.getPalettes("dev1"),
+      api.getPreferences(),
+      api.putPreference("k.1", { a: 1 }),
+    ]
+    await Promise.all(calls)
 
-  // Fails if a client function sends the wrong method, path or body, or leaves a path segment unencoded.
-  it.each(cases)("%s", async (_name, call, method, path, body) => {
+    expect(fetchMock.mock.calls).toHaveLength(Object.keys(api).length)
+    for (const [url, init] of fetchMock.mock.calls) {
+      const route = url.replace("/api/devices/dev1", "/api/devices/:id").replace("/api/preferences/k.1", "/api/preferences/:key")
+      const method = init?.method as "GET"
+      expect(t.app.hasRoute({ method, url: route }), `${method} ${route}`).toBe(true)
+    }
+  })
+
+  // Fails if a write drops the X-Strand-Request header or the JSON Content-Type.
+  it("sends the request-guard and content-type headers on a write", async () => {
     const fetchMock = stubFetch(json({}))
-    await call()
+    await api.addDevice("wled.local")
 
-    const [url, init] = fetchMock.mock.calls[0]!
-    expect(url).toBe(path)
-    expect(init?.method).toBe(method)
-    expect(init?.body).toBe(body === undefined ? undefined : JSON.stringify(body))
-    const headers = init?.headers as Record<string, string>
-    expect(headers["X-Strand-Request"]).toBe("1")
-    expect(headers["Content-Type"]).toBe(body === undefined ? undefined : "application/json")
+    const [, init] = fetchMock.mock.calls[0]!
+    expect(init?.headers).toEqual({ "X-Strand-Request": "1", "Content-Type": "application/json" })
+    expect(init?.body).toBe(JSON.stringify({ host: "wled.local" }))
+  })
+
+  // Fails if a path segment is sent unencoded.
+  it("encodes the device id in the path", async () => {
+    const fetchMock = stubFetch(json({}))
+    await api.getInfo("a/b")
+
+    expect(fetchMock.mock.calls[0]![0]).toBe("/api/devices/a%2Fb/info")
   })
 })
 
@@ -72,6 +91,15 @@ describe("request", () => {
     expect(err).toMatchObject({ status: 502, code: "device_error" })
     expect((err as ApiError).message).not.toContain("<html>")
     expect((err as ApiError).message.length).toBeGreaterThan(0)
+  })
+
+  // Fails if a 2xx reply that is not JSON throws a raw parser error instead of an ApiError.
+  it("throws device_error for a non-JSON success reply", async () => {
+    stubFetch(new Response("<html>", { status: 200 }))
+
+    const err = await request("GET", "/api/x").catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(ApiError)
+    expect(err).toMatchObject({ status: 200, code: "device_error" })
   })
 
   // Fails if a 204 reply is parsed as JSON instead of resolving to undefined.
