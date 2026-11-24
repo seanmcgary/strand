@@ -10,7 +10,7 @@ export default defineConfig({
   resolve: { alias: { "@": path.resolve(__dirname, "./src") } },
   test: {
     environment: "node",
-    include: ["server/**/*.test.ts", "src/**/*.test.{ts,tsx}"],
+    include: ["server/**/*.test.ts", "src/**/*.test.{ts,tsx}", "test/**/*.test.ts"],
     testTimeout: 5_000 * ciTimeoutMultiplier,
     hookTimeout: 10_000 * ciTimeoutMultiplier,
   },

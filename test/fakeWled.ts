@@ -3,11 +3,13 @@ import type { AddressInfo, Socket } from "node:net";
 import { Readable } from "node:stream";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import type { Seed } from "./fixtures/seeds";
+import { applyPost, bootSim, listState, simFromState } from "./wledSim.ts";
 
 /**
  * A fake WLED device for tests: a Fastify server on 127.0.0.1 that serves the
- * WLED endpoints the app uses from a seed, applies config writes with the
- * firmware's rules, and can be told to fail like a real device.
+ * WLED endpoints the app uses from a seed, applies state writes through the
+ * segment simulator and config writes with the firmware's rules, and can be
+ * told to fail like a real device.
  */
 
 export type FakeMode = "ok" | "timeout" | "busy" | "reset" | "deviceError" | "notJson" | "serverError" | "huge";
@@ -22,6 +24,10 @@ export type FakeOpts = {
   scanEmptyCalls?: number;
   /** Merged over `/json/info`. A key set to `undefined` is left out of the reply. */
   infoOverride?: object;
+  /** Listen on this port instead of a free one. */
+  port?: number;
+  /** The largest POST body in bytes; a larger one gets 400 (`JSON_BUFFER_SIZE`, 10240 on ESP8266). */
+  maxBody?: number;
 };
 
 export type FakeWled = {
@@ -29,9 +35,15 @@ export type FakeWled = {
   requests: { method: string; path: string; body: unknown }[];
   setMode(m: FakeMode): void;
   failNext(m: FakeMode, match: { method?: string; path?: string; skip?: number }): void;
+  /** Reboots: the uptime restarts and the segments boot from `cfg.def` and the boot preset. */
   restart(): void;
   cfg: Record<string, unknown>;
-  state: Record<string, unknown>;
+  /** The state `GET /json/state` returns, as a snapshot. */
+  readonly state: ReturnType<typeof listState>;
+  /** Applies a state change made by another client. */
+  applyState(body: Record<string, unknown>): void;
+  /** Runs `fn` once, after the next `POST /json/state` is applied and before it is answered. */
+  afterPost(fn: () => void): void;
   close(): Promise<void>;
 };
 
@@ -52,7 +64,11 @@ export async function startFakeWled(seed: Seed, opts: FakeOpts = {}): Promise<Fa
   const scanEmptyCalls = opts.scanEmptyCalls ?? 2;
 
   const cfg = clone(seed.cfg) as unknown as Json;
-  const state: Json = clone(seed.state);
+  const def = cfg.def as { on: boolean; bri: number; ps: number };
+  const sim = simFromState(seed.state as Parameters<typeof simFromState>[0], seed.info.leds.maxseg, seed.info.leds.count);
+  sim.presets = clone(seed.presets);
+  const maxBody = opts.maxBody ?? 10240;
+  let afterPostFns: (() => void)[] = [];
   const requests: FakeWled["requests"] = [];
   let mode: FakeMode = "ok";
   const pending: { mode: FakeMode; method?: string; path?: string; skip: number }[] = [];
@@ -70,9 +86,18 @@ export async function startFakeWled(seed: Seed, opts: FakeOpts = {}): Promise<Fa
     ...opts.infoOverride,
   });
 
+  // `cfg.def.ps` is the boot preset; a psave with bootps changes it (presets.cpp:238-243).
+  const applyState = (body: Json): void => {
+    sim.bootps = def.ps;
+    applyPost(sim, body);
+    def.ps = sim.bootps;
+  };
+
   const restart = (): void => {
     bootAt = Date.now();
     uptimeAtBoot = 0;
+    sim.bootps = def.ps;
+    bootSim(sim, def);
   };
 
   // The firmware checks a top-level "pin" in any JSON POST before it applies the body.
@@ -96,6 +121,22 @@ export async function startFakeWled(seed: Seed, opts: FakeOpts = {}): Promise<Fa
   };
 
   const app = Fastify({ logger: false, forceCloseConnections: true });
+  // The firmware answers a body over its JSON buffer with 400 and applies nothing.
+  app.addContentTypeParser("application/json", { parseAs: "string" }, (_request, body, done) => {
+    if (Buffer.byteLength(body as string) > maxBody) {
+      done(Object.assign(new Error("body too large"), { statusCode: 400 }), undefined);
+      return;
+    }
+    try {
+      done(null, JSON.parse(body as string));
+    } catch (err) {
+      done(Object.assign(err as Error, { statusCode: 400 }), undefined);
+    }
+  });
+  app.setErrorHandler((err: { statusCode?: number }, _request, reply) => {
+    if (err.statusCode === 400) return reply.code(400).send({ error: 9 });
+    return reply.code(err.statusCode ?? 500).send("");
+  });
   const sockets = new Set<Socket>();
   app.server.on("connection", (socket: Socket) => {
     sockets.add(socket);
@@ -139,16 +180,18 @@ export async function startFakeWled(seed: Seed, opts: FakeOpts = {}): Promise<Fa
     }
   });
 
-  const full = (): Json => ({ state, info: info(), effects: seed.effects, palettes: seed.palettes });
+  const state = () => listState(sim);
+  const full = (): Json => ({ state: state(), info: info(), effects: seed.effects, palettes: seed.palettes });
 
   app.get("/json", async () => full());
-  app.get("/json/state", async () => state);
+  app.get("/json/state", async () => state());
   app.get("/json/info", async () => info());
-  app.get("/json/si", async () => ({ state, info: info() }));
+  app.get("/json/si", async () => ({ state: state(), info: info() }));
   app.get("/json/effects", async () => seed.effects);
   app.get("/json/fxdata", async () => seed.fxdata);
   app.get("/json/palettes", async () => seed.palettes);
   app.get("/json/pal", async () => seed.palettes);
+  app.get<{ Querystring: { page?: string } }>("/json/palx", async (request) => palx(seed, Number(request.query.page) || 0));
   app.get("/json/cfg", async () => cfg);
   app.get("/json/nodes", async () => ({
     nodes: (opts.nodes ?? []).map((n, i) => ({ name: `WLED ${i + 1}`, type: 32, ip: n.ip, age: 0, vid: seed.info.vid })),
@@ -163,7 +206,7 @@ export async function startFakeWled(seed: Seed, opts: FakeOpts = {}): Promise<Fa
   // /json/pins does not exist in 0.15: the path falls through to the full /json reply.
   app.get("/json/pins", async () => (version === "0.15" ? full() : { pins: seed.pins }));
   app.get("/json/*", async (_request, reply) => reply.code(501).send({ error: 4 }));
-  app.get("/presets.json", async () => seed.presets);
+  app.get("/presets.json", async () => sim.presets);
 
   app.get<{ Querystring: { p?: string } }>("/settings/s.js", async (request, reply) => {
     const page = Number(request.query.p ?? 0);
@@ -175,18 +218,20 @@ export async function startFakeWled(seed: Seed, opts: FakeOpts = {}): Promise<Fa
   const postState = async (request: FastifyRequest, reply: FastifyReply, view: () => unknown) => {
     const body = isObject(request.body) ? request.body : {};
     checkPin(body);
-    for (const [key, value] of Object.entries(body)) {
-      if (key === "v" || key === "pin" || key === "rb") continue;
-      if (key === "seg") applySegments(state, value);
-      else if (isObject(value) && isObject(state[key])) state[key] = { ...(state[key] as Json), ...clone(value) };
-      else state[key] = clone(value);
+    applyState(clone(body));
+    if (request.url.split("?")[0] === "/json/state") {
+      const fns = afterPostFns;
+      afterPostFns = [];
+      fns.forEach((fn) => fn());
     }
-    if (body.rb === true) restart();
-    return reply.send(body.v === true ? view() : { success: true });
+    const answer = body.v === true ? view() : { success: true };
+    // json.cpp:440: "rb" reboots after the reply, and not in a psave request.
+    if (body.rb === true && body.psave === undefined) restart();
+    return reply.send(answer);
   };
   app.post("/json", (request, reply) => postState(request, reply, full));
-  app.post("/json/state", (request, reply) => postState(request, reply, () => state));
-  app.post("/json/si", (request, reply) => postState(request, reply, () => ({ state, info: info() })));
+  app.post("/json/state", (request, reply) => postState(request, reply, state));
+  app.post("/json/si", (request, reply) => postState(request, reply, () => ({ state: state(), info: info() })));
 
   app.post("/json/cfg", async (request, reply) => {
     const body = isObject(request.body) ? request.body : {};
@@ -201,7 +246,7 @@ export async function startFakeWled(seed: Seed, opts: FakeOpts = {}): Promise<Fa
     return { success: true };
   });
 
-  await app.listen({ host: "127.0.0.1", port: 0 });
+  await app.listen({ host: "127.0.0.1", port: opts.port ?? 0 });
   const port = (app.server.address() as AddressInfo).port;
 
   let closing: Promise<void> | undefined;
@@ -216,7 +261,13 @@ export async function startFakeWled(seed: Seed, opts: FakeOpts = {}): Promise<Fa
     },
     restart,
     cfg,
-    state,
+    get state() {
+      return state();
+    },
+    applyState,
+    afterPost(fn) {
+      afterPostFns.push(fn);
+    },
     close() {
       closing ??= (async () => {
         sockets.forEach((s) => s.destroy());
@@ -225,20 +276,6 @@ export async function startFakeWled(seed: Seed, opts: FakeOpts = {}): Promise<Fa
       return closing;
     },
   };
-}
-
-/** Merges `seg` from a state POST into the segments, by `id` (or the array index when there is none). */
-function applySegments(state: Json, value: unknown): void {
-  const segs = (state.seg as Json[] | undefined) ?? [];
-  const updates = Array.isArray(value) ? value : [value];
-  updates.forEach((update: unknown, i) => {
-    if (!isObject(update)) return;
-    const id = typeof update.id === "number" ? update.id : Array.isArray(value) ? i : ((state.mainseg as number) ?? 0);
-    const current = segs.find((s) => s.id === id);
-    if (current) Object.assign(current, clone(update), { id });
-    else segs.push({ ...clone(update), id });
-  });
-  state.seg = segs;
 }
 
 /** cfg.cpp keeps every key a write leaves out: objects merge at every depth, anything else (arrays too) replaces. */
@@ -274,4 +311,40 @@ function mergeNetwork(current: Json, next: Json): Json {
 function mergeAp(current: Json, next: Json): Json {
   const { pskl: _pskl, psk, ...rest } = next;
   return withPskLength(deepMerge(current, rest) as Json, psk, current.pskl);
+}
+
+// Two colors per palette for `/json/palx`; palette k uses entries k and k + 1.
+const PALX_COLORS = [
+  [255, 0, 0],
+  [255, 160, 0],
+  [255, 255, 0],
+  [0, 200, 80],
+  [0, 80, 255],
+  [128, 0, 255],
+  [255, 255, 255],
+];
+
+/** `serializePalettes` (json.cpp:983-1058): 8 palettes a page (5 on ESP8266); palettes 1-5 are color references. */
+function palx(seed: Seed, requested: number): Json {
+  const perPage = seed.info.arch === "esp8266" ? 5 : 8;
+  const count = seed.palettes.length;
+  const maxPage = Math.floor(count / perPage);
+  const page = Math.min(Math.max(0, requested), maxPage);
+  const refs: Record<number, string[]> = {
+    1: ["r", "r", "r", "r"],
+    2: ["c1"],
+    3: ["c1", "c1", "c2", "c2"],
+    4: ["c3", "c2", "c1"],
+    5: [...Array<string>(5).fill("c1"), ...Array<string>(5).fill("c2"), ...Array<string>(5).fill("c3"), "c1"],
+  };
+  const p: Json = {};
+  for (let id = page * perPage; id < Math.min(count, (page + 1) * perPage); id++) {
+    const a = PALX_COLORS[id % PALX_COLORS.length]!;
+    const b = PALX_COLORS[(id + 1) % PALX_COLORS.length]!;
+    p[String(id)] = refs[id] ?? [
+      [0, ...a],
+      [255, ...b],
+    ];
+  }
+  return { m: maxPage, p };
 }
