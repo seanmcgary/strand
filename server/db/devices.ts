@@ -96,17 +96,10 @@ export function setLastIp(db: DatabaseSync, id: string, lastIp: string, now: Dat
 export function addPendingReboot(db: DatabaseSync, id: string, names: string[], now: Date): void {
   if (names.length === 0) return;
   const at = now.toISOString();
-  db.exec("BEGIN");
-  try {
-    const current = get(db, id)?.pendingReboot ?? [];
-    const merged = [...new Set([...current, ...names])];
-    db.prepare("UPDATE devices SET pending_reboot = ?, pending_since = ?, updated_at = ? WHERE id = ?")
-    .run(JSON.stringify(merged), at, at, id);
-    db.exec("COMMIT");
-  } catch (err) {
-    db.exec("ROLLBACK");
-    throw err;
-  }
+  const current = get(db, id)?.pendingReboot ?? [];
+  const merged = [...new Set([...current, ...names])];
+  db.prepare("UPDATE devices SET pending_reboot = ?, pending_since = ?, updated_at = ? WHERE id = ?")
+  .run(JSON.stringify(merged), at, at, id);
 }
 
 export function clearPendingReboot(db: DatabaseSync, id: string, now: Date): void {
