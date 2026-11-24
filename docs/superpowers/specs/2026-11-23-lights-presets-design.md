@@ -1,0 +1,354 @@
+# Lights and Presets design
+
+Date: 2026-11-23
+Status: draft, waiting for approval
+
+## 1. Intent
+
+The design spec (`docs/design/strand-wled-spec.html`) shows the device page with four tabs: Control, Segments, Presets and Settings. Control, Segments and Presets are placeholders ("Designed in the next round"). This document designs them.
+
+The owner thinks of a WLED controller as a set of physical strands, not as a list of WLED segments. A user customizes one strand at a time. The stock WLED UI shows segments, which are an implementation detail. Strand shows strands, ranges and patterns, and writes WLED segments to make them.
+
+The owner also wants presets that WLED presets cannot give: a saved configuration for specific strands, and a generic look that fits any strand. These are app-level presets in Strand's database.
+
+## 2. Decisions the owner made
+
+1. **Strands.** A strand is one LED output of the controller (one entry of `hw.led.ins`: a GPIO and an LED count). A user customizes one strand at a time. A change never spans strands, unless the strands are combined.
+2. **Combining strands is explicit.** The user combines two or more strands with a deliberate action. A combined strand is controlled as one strand everywhere. Strand never combines strands on its own.
+3. **Ranges.** A strand starts as one range that covers the whole strand. The user can split it into named ranges, for an uneven layout.
+4. **Patterns.** Each range has one pattern:
+   - **All:** the range is one slot.
+   - **Every N:** N slots repeat along the range.
+   - **Group size G** (default 1): the number of LEDs in each slot step. With N = 2 and G = 2, the LEDs are `1 1 2 2 1 1 2 2`.
+   - **Individual:** the user sets the color of each LED.
+5. **Per-strand power and brightness.** Each strand (or combined strand) has its own on/off and brightness.
+6. **One Lights tab.** Control and Segments merge into one tab, "Lights". The tabs are Lights, Presets, Settings.
+7. **Segments made elsewhere** (option A). Strand maps every device segment that it can to strands, ranges and patterns. A segment that does not fit shows as a "Custom segment". Strand changes nothing on the device until the user edits.
+8. **App-level presets, per controller.** WLED presets are not used. There are two kinds:
+   - **Scene:** a saved configuration for one strand or combined strand: its ranges, patterns, slots, paint, power and brightness.
+   - **Look:** a generic pattern with its slots (colors, effects, palettes). It has no LED positions, so it fits any length.
+9. **Per-LED paint is in v1.** This overrides PRD §29 ("arbitrary per-pixel painting").
+10. **The layout survives a reboot through a startup preset** (option A). WLED keeps segments only in RAM. At boot it loads the boot preset, or else makes one default segment (`wled00/wled.cpp:666`, `:690`). Strand keeps one reserved WLED preset on each controller, ID 250, named "Strand: startup", and sets it as the boot preset (section 6.7).
+
+## 3. Goals, non-goals, anti-goals
+
+### Goals
+
+- PRD §28 acceptance criteria 5-15, with the owner's model above.
+- The user never types a segment index or a start/stop number.
+- Every layout that Strand writes reads back as the same strands, ranges and patterns.
+
+### Non-goals
+
+- Cross-controller scenes (PRD §3, §29). A scene or a look belongs to one controller.
+- WLED presets and playlists as a user feature. The Presets tab does not list them. They stay on the device, and the stock UI still runs them. The one exception is the reserved startup preset (section 6.7), which the user does not see as a preset.
+- 2D matrix layouts. A matrix device shows its segments as Custom segments.
+- Live LED preview animation. The strip shows the configured slot colors.
+- Running Strand presets from a WLED button, the WLED boot preset, WLED schedules or Home Assistant. Strand presets exist only in Strand.
+
+### Anti-goals
+
+The work fails, even if it runs, if:
+
+- Strand changes a segment on a strand that the user did not edit.
+- Strand sends `sel` or `mainseg`. (The firmware changes them on its own when segments are created or deleted: a new segment is selected, `FX.h:594`; deleting the main segment moves `mainseg`, `json.cpp:189-190`. Strand accepts these side effects.)
+- A layout that Strand writes does not read back as the layout the user made.
+- Strand combines strands without an explicit user action.
+- The browser calls a WLED device directly.
+
+## 4. Changes to documented rules
+
+These rules change. The implementation plan updates each document.
+
+| Document | Rule now | Rule after |
+|---|---|---|
+| `CLAUDE.md` | "Presets use WLED's native preset functionality. No app-level scene system." | Presets are Strand scenes and looks, stored in Strand's database per controller. WLED presets are not a user feature. Strand writes one reserved WLED preset (ID 250) as the boot preset, to keep the layout across reboots. |
+| `CLAUDE.md` | "Lighting state, effects, palettes, segments, and presets live on the WLED device. Don't cache or duplicate them in the database." | Live lighting state, effects, palettes and segments live on the device. Saved scenes and looks, and strand combinations, are in the database. |
+| `CLAUDE.md` | The database is `devices` and `preferences`. | Add `scenes`, `looks` and `strand_groups`. |
+| `docs/mvp-prd.md` §15, §29 | WLED presets; per-pixel painting deferred. | Scenes and looks; Individual paint is in v1. |
+| `docs/superpowers/specs/2026-10-23-app-server-design.md` §8.4 | Preset run, save and delete go through the state endpoint. | Scenes and looks have their own endpoints (section 9). |
+
+## 5. Approaches considered
+
+1. **Strand model over WLED segments (chosen).** Strand derives strands from the LED outputs, and writes ranges and patterns as WLED segments. It reads them back from segment geometry and names. Layout stays on the device, so the stock UI and Home Assistant see real segments. The startup preset (section 6.7) keeps the layout on the device across reboots, with no Strand server running.
+2. **Segments as the user model.** Show WLED segments directly, as the stock UI does, with a better editor. Rejected: the owner wants strands and patterns, and an "Every 3" pattern is three segments that the user would have to keep aligned by hand.
+3. **Strand model in the database only.** Store ranges and patterns in Strand's database and push segments to the device. Rejected: the database and the device would disagree after any change made elsewhere, and layout would not survive a Strand reinstall.
+
+## 6. Model
+
+### 6.1 Strands
+
+- `strandsFromConfig(cfg)` returns one strand for each `hw.led.ins` entry, in LED order: `{ key: "o<i>", start, len, pin, type }`. `GET /json/cfg` is not PIN-gated (`wled00/wled_server.cpp:441-457`), so a locked device still shows its strands.
+- Strand names: "Strand 1", "Strand 2", in LED order, with the GPIO as a subtitle ("GPIO 16 · 150 LEDs"). The user can rename a strand. The name is a preference (`strandNames.<deviceId>`). This is my call.
+- A device with one strand hides the strand picker.
+- A **combined strand** joins strands whose LED ranges touch (`a.start + a.len === b.start`). Its key is the member keys joined with `+` (`o0+o1`). Only adjacent strands can combine, because one WLED segment covers one unbroken LED range.
+- If the LED outputs change (Settings → LED Hardware) so that a saved combination no longer touches, Strand drops the combination and shows a notice on the Lights tab.
+
+### 6.2 Ranges and patterns as WLED segments
+
+Each range is one or more WLED segments inside its strand. For a range from LED `s` (inclusive) to `e` (exclusive):
+
+| Pattern | Segments | Geometry |
+|---|---|---|
+| All | 1 | `start s, stop e, grp 1, spc 0` |
+| Every N, group G | N | slot k (0-based): `start s + k·G, stop e, grp G, spc (N−1)·G` |
+| Individual | 1 | `start s, stop e, grp 1, spc 0, frz true`, colors set with `seg.i` |
+
+The Every N geometry follows the firmware: a segment draws virtual pixel `i` at physical LEDs `start + i·(grp+spc)` to `+grp−1`, and does not draw its spacing LEDs (`wled00/FX_fcn.cpp:1850-1856`). So N overlapping segments each draw one slot.
+
+**Every N limits.** `grp` and `spc` are one byte each (`FX.h:470`). A larger value wraps with no error. So `G ≤ 255` and `(N−1)·G ≤ 255`. Example: N = 16 allows G up to 17; G = 255 allows only N = 2. N is also limited by the free segment budget.
+
+**Segment names.** Strand writes the range name into each segment's `n`, with an ASCII tag for Every N and for Individual:
+
+- All: `Patio`
+- Every N: `Patio 1/3`, `Patio 2/3`, `Patio 3/3`
+- Individual: `Patio paint`
+
+A range with no user name uses the strand name. The firmware limit is 32 bytes (`FX_fcn.cpp:766`), so Strand cuts the range name by bytes (on a UTF-8 character boundary) to leave room for the whole tag. The tags make the layout readable in the stock UI too. The firmware clears a segment's name when its `start` or `stop` changes and `n` is absent (`json.cpp:144-151`), so Strand sends `n` with every geometry change.
+
+**Reading a layout back** (`readLayout`): for each strand, take the device segments that lie inside the strand. Group them into ranges by the name tag. If there is no tag, group them by geometry (same `stop`, same `grp`, `spc = (N−1)·grp`, starts `G` apart). A segment that fits neither rule is a **Custom segment**.
+
+**A segment that crosses an uncombined strand boundary.** This is the WLED default on a controller with several outputs: one segment over all of them (`autoSegments` is off unless the firmware was built with it, `FX.h:866-870`). The Lights tab shows a banner on each strand the segment touches: "Strand 1 and Strand 2 share one segment." with two buttons, **Split by strand** and **Combine strands**. Layout edits on those strands are disabled until the user picks one. Split by strand replaces the segment with one segment per strand, each with the old segment's colors, effect and palette. Nothing changes until the user picks.
+
+**Segment IDs.** WLED keeps segments in a vector. A deleted segment stays as an empty slot (`stop: 0`) that `/json/state` does not list, and it still counts toward `maxseg` (`appendSegment` checks the vector size). A request for an ID below the vector size reuses that slot. A request for an ID at or above the size is added at the end (`json.cpp:79-83`). So Strand:
+
+1. gives new segments the unlisted IDs below `max(listed id)` first (they are empty slots), lowest first, then `max(listed id) + 1`, `+ 2` and so on. Those higher IDs either reuse empty slots at the end of the vector or are appended, so every empty slot is reused before the vector grows. The free budget is `maxseg − (number of listed segments)`;
+2. never deletes half or more of more than 3 segments in one request, because the firmware then purges and renumbers every segment (`json.cpp:481-488`); a larger delete is split into two requests;
+3. reads the state again after every write that creates segments, and maps new segments by name.
+
+**Writing a layout** (`writeRange`, `writeStrand`): Strand replaces the segments of the edited range or strand only. In one `POST /json/state` it deletes the old segments of that range (`{"id":n,"stop":0}`) and creates the new ones with the IDs from the rule above. It never sends `sel` or `mainseg`. It never sends a segment outside the edited range.
+
+**Segment budget.** The device allows `info.leds.maxseg` segments (16, 32 or 64). The Lights tab shows "Segments used: 7 of 32". An edit that needs more segments than are free is refused before it is sent, with a message that says how many it needs.
+
+### 6.3 Slots
+
+A slot is one WLED segment. Its controls:
+
+- color: `col[0]` (and `col[1]`, `col[2]` when the effect's metadata shows those slots),
+- effect `fx` with its parameters `sx, ix, c1, c2, c3, o1, o2, o3`, shown from the effect metadata (`/json/fxdata`, `docs/wled-ui-audit/main-ui/effects-palettes.md` §2),
+- palette `pal`, when the effect uses a palette.
+
+Strand sends each slot change with the segment's `id`. It never sends a `seg` object without an `id`.
+
+### 6.4 Individual paint
+
+- Strand writes the colors with `{"seg":{"id":n,"i":[...]}}`. Runs of one color use the range form `[start, stop, "RRGGBB"]` to keep the body small. The firmware freezes the segment and clears it first (`wled00/json.cpp:314-361`).
+- An effect cannot run on a painted range.
+- WLED does not report painted colors in `/json/state`. `/json/live` is not usable either: it returns the blended frame, scaled by the global brightness, and black when the device is off (`json.cpp:1438-1475`). Strand reads the paint from the startup preset (section 6.7), which holds the last paint that Strand wrote.
+- When global power goes from off to on, the firmware unfreezes every segment (`json.cpp:389-393`), so the painted range shows its `col[0]` instead of the paint. When Strand turns the device or a strand on, it sends the paint again in the same request. When another client (Home Assistant, a button, the stock UI) turns the device on, the paint is gone until the next Strand edit or the next reboot. The Lights tab shows "Paint not showing. [Restore paint]" when a painted range is not frozen.
+
+### 6.5 Power and brightness
+
+- The page header switch and the dashboard card control the device: global `on` and `bri`.
+- Each strand has its own switch and brightness slider. They set `on` and `bri` on every segment of the strand. Segment `bri` is opacity on top of the global brightness; `0` turns the segment off (`segments.md` §5).
+
+### 6.6 Flash start and flash end
+
+WLED has no LED-identify command. Strand flashes an LED with a temporary segment:
+
+1. Create a one-LED segment at the highest free ID: `{"start":i,"stop":i+1,"fx":0,"col":[[255,255,255]],"bri":255,"on":true,"n":"Strand flash"}`. A segment with a higher ID draws on top.
+2. After 3 seconds, delete it (`stop:0`).
+
+The browser runs both steps through `PATCH /api/devices/:id/state`, because the server keeps no timers. If the page closes during the 3 seconds, the segment stays. The Lights tab deletes any segment named "Strand flash" when it loads. The flash needs one free segment; when there is none, the buttons are disabled with the reason.
+
+### 6.7 Startup preset
+
+WLED keeps segments only in RAM. A reboot, a power cut, or a save of LED Hardware settings (`wled.cpp:242-245`) loses the layout. So Strand keeps the layout in one reserved WLED preset on each controller:
+
+- **ID 250, name "Strand: startup".** It is an API preset: Strand writes its content directly, with `{"psave":250,"o":true,"n":"Strand: startup","bootps":250, ...content}` (`wled00/presets.cpp:218-265`). The content is the full layout: `on`, `bri`, and every listed segment with its geometry, name, colors, effect, parameters, palette, `on`, `bri`, plus `i` for painted ranges. A normal "save current state" preset is not enough, because the firmware does not save paint.
+- **`bootps: 250`** makes the controller load it at boot, with no Strand server running.
+- **When Strand writes it:** 5 seconds after the last layout, slot, power or paint change on the Lights tab, and after every scene or look apply. Each write rewrites `/presets.json` on the controller's flash, so the 5-second wait keeps it to about one write per editing session. The firmware warns that immediate API-preset saves can corrupt `presets.json` (`presets.cpp:250`), so Strand never sends two saves less than 5 seconds apart.
+- **Another boot preset.** If `info.leds.bootps` is set to another preset the first time Strand would write, Strand asks once: "Backyard starts with your WLED preset 'Evening' at boot. Strand needs to replace it to keep your strand setup after a restart. [Replace] [Keep mine]". With "Keep mine", Strand does not write the startup preset for that device, and the Lights tab shows "Your setup will reset when the controller restarts." The choice is a preference (`startup.<deviceId>`).
+- **Reading paint:** `GET /presets.json` returns the preset; Strand reads the `i` arrays of the painted segments, by segment name.
+- **The Presets tab does not list it.** The stock UI does, as "Strand: startup".
+
+## 7. Screens
+
+All screens use the design spec's tokens, shadcn class strings, components (`Switch`, `Slider`, `Select`, `Field`, `SettingsCard`, `Dialog`, sheets, toasts) and patterns (skeletons, offline banner, optimistic updates with rollback and an error toast).
+
+### 7.1 Device page
+
+```
+← Devices
+Backyard   ● Online · wled-backyard.local                    On [●]
+[ Lights ] [ Presets ] [ Settings ]
+```
+
+Tabs: Lights (`/devices/:id`), Presets (`/devices/:id?tab=presets`), Settings (`/devices/:id/settings`). The banners (offline, live data, pending reboot) stay as designed.
+
+### 7.2 Lights tab
+
+```
+Strands  [ Roofline · GPIO 16 · 150 ]  [ Garage · GPIO 17 · 60 ]  [ Combine… ]
+
+Roofline                                   [● On]  ☀ ━━━━━●━━  72%
+0 ━━━━━━━━━━━━━━━━┿━━━━━━━━━━━━━━━━━━━━━┿━━━━━━━━━━ 149
+  Patio              Kitchen                 Rest
+[+ Add range]                                   Segments used 7 of 32
+
+▾ Patio · LEDs 0–59 · Every 2 · group 2     [Flash start] [Flash end] ⋯
+   Pattern [All] [Every N] [Individual]    N [2]  Group [2]
+   ● Slot 1   Warm white · Solid                                  ›
+   ● Slot 2   Red · Twinkle                                       ›
+▸ Kitchen · LEDs 60–119 · All · Rainbow
+▸ Rest · LEDs 120–149 · Individual
+```
+
+- **Strand picker:** chips. "Combine…" opens a dialog that lists the strands as adjacent pairs and asks for confirmation. A combined strand's chip has a "Separate" action in its menu. Separating cuts every range that crosses the boundary, after a confirmation that names those ranges.
+- **Strip:** a horizontal bar with one cell per LED (scaled to fit; one cell can stand for several LEDs on long strips). Each cell shows its slot's color, or its painted color. Range boundaries are drag handles. Dragging snaps to whole LEDs and shows the LED number. A handle cannot cross the next boundary. The strip is a `role="group"` with each handle as a `role="slider"` with arrow-key support (1 LED; Shift: 10 LEDs).
+- **Add range:** splits the selected range at its middle. The user then drags the boundary. New ranges are named "Range 2", "Range 3".
+- **Range menu (⋯):** Rename, Merge with next, Delete (merges into the neighbor).
+- **Range card:** collapsed rows show the summary. The expanded card shows the pattern control, N and G steppers (N 2-16 and G 1-255, with `(N−1)·G ≤ 255` and N capped by the free segment budget; a stepper at its limit is disabled with a tooltip that gives the reason), and the slot rows.
+- **Custom segments** list below the ranges, each with color, effect, palette and on/off. They have no layout controls.
+- **Polling:** the tab reads the state every 5 seconds while it is visible. It pauses while the user drags or while a slot editor is open, so that incoming state does not move the user's work (`segments.md` §5).
+
+### 7.3 Slot editor
+
+A sheet (bottom sheet on mobile, side sheet on desktop) with three parts:
+
+1. **Color:** a hue/saturation area, a brightness bar, a hex field, and the last 8 colors used (a preference). Extra color slots (Bg, Cs) show when the effect metadata shows them.
+2. **Effect:** a search field, a "Favorites" group (stars; preference `favorites.effects`, stored by name), and "All effects" (sorted by name, Solid first, `RSVD` removed). The selected effect shows its sliders and checkboxes with the labels from the metadata.
+3. **Palette:** a search field and the list, shown only when the effect uses a palette.
+
+Each change is sent at once (sliders on release). "Apply to all slots" copies the effect and palette to the other slots of the range.
+
+### 7.4 Individual paint
+
+When the pattern is Individual, the range card shows:
+
+```
+Brush ● #FF8800   [Fill range]   [Clear]
+▓▓▓▓░░░░▓▓▓▓░░░░▓▓▓▓░░░░   (tap or drag to paint)
+```
+
+Strand sends the paint when the pointer is released, as one `seg.i` request with run-length ranges.
+
+### 7.5 Presets tab
+
+```
+Scenes                                            [+ Save scene…]
+  Roofline: Party        Roofline              ▶ Apply   ⋯
+  Holiday                Roofline + Garage     ▶ Apply   ⋯
+Looks                                             [+ Save look…]
+  Candy cane   ●○●○      Every 2 · group 3     ▶ Apply to…  ⋯
+  Warm white   ●         All                   ▶ Apply to…  ⋯
+```
+
+- **Save scene…:** a dialog with a name and a strand select (default: the strand open on the Lights tab). It saves that strand's current ranges, patterns, slots, paint, power and brightness.
+- **Save look…:** a dialog with a name and a range select. It saves that range's pattern and slots. A range with Individual paint cannot be saved as a look; the option is disabled with the reason.
+- **Apply (scene):** restores the scene's strand. If the strand's LED count changed since the save, a dialog warns first. If the strand no longer exists, or the combination no longer exists, the scene shows "Strand not found" and Apply is disabled.
+- **Apply to… (look):** a dialog with a checkbox tree of targets: each strand (or combined strand) and its ranges. Checking a strand applies the look to each of its ranges. Ranges keep their positions.
+- **Menu (⋯):** Rename, Delete (with confirmation).
+- Empty states: "No scenes yet. Save the current strand setup to come back to it." and "No looks yet. Save a range's colors and effects to use them on any strand."
+
+## 8. Data
+
+New migration (append-only):
+
+```sql
+CREATE TABLE scenes (
+  id          TEXT PRIMARY KEY,                -- UUID v4
+  device_id   TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+  name        TEXT NOT NULL,                   -- 1-64 characters
+  strand_key  TEXT NOT NULL,                   -- "o0" or "o0+o1"
+  led_count   INTEGER NOT NULL,                -- the strand's length at save time
+  content     TEXT NOT NULL,                   -- JSON StrandSnapshot
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+);
+CREATE TABLE looks (
+  id          TEXT PRIMARY KEY,
+  device_id   TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+  name        TEXT NOT NULL,
+  content     TEXT NOT NULL,                   -- JSON Look
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+);
+CREATE TABLE strand_groups (
+  device_id   TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+  strand_key  TEXT NOT NULL,                   -- "o0+o1"
+  PRIMARY KEY (device_id, strand_key)
+);
+```
+
+`devices` delete must cascade, so `openDb` keeps `PRAGMA foreign_keys = ON` (already in Task 3).
+
+Types (in `shared/apiTypes.ts`):
+
+```ts
+type SlotLook = { col: number[][]; fx: number; fxName: string; sx: number; ix: number;
+                  c1: number; c2: number; c3: number; o1: boolean; o2: boolean; o3: boolean;
+                  pal: number; palName: string };
+type Pattern = { kind: "all" } | { kind: "every"; n: number; group: number } | { kind: "individual" };
+type Look = { pattern: Exclude<Pattern, { kind: "individual" }>; slots: SlotLook[] };
+type RangeSnapshot = { name: string; start: number; len: number;   // relative to the strand
+                       pattern: Pattern; slots: SlotLook[]; paint?: string[] /* hex per LED */ };
+type StrandSnapshot = { on: boolean; bri: number; ranges: RangeSnapshot[] };
+```
+
+Effects and palettes are stored by ID and by name. On apply, Strand uses the ID when the name at that ID still matches, and otherwise looks the name up. An effect that no longer exists falls back to Solid, and the apply result lists it. Effect IDs change between WLED builds (`docs/wled-ui-audit/README.md`).
+
+## 9. API additions
+
+| Method and path | Result |
+|---|---|
+| `GET /api/devices/:id/startup` | `{ enabled: boolean; otherBootPreset: { id, name } \| null; paint: Record<string, string[]> }` (paint by segment name, from preset 250 in `/presets.json`) |
+| `PUT /api/devices/:id/startup` `{ paint }` | `204`. Reads `/json/state`, builds the preset content (section 6.7) with the given paint, and saves preset 250 with `bootps: 250`. Returns `409 startup_declined` when the user chose "Keep mine". |
+| `POST /api/devices/:id/startup/consent` `{ replace: boolean }` | `204`. Records the answer to the boot-preset question. |
+| `GET /api/devices/:id/strand-groups` | `string[]` (strand keys) |
+| `PUT /api/devices/:id/strand-groups` `{ keys }` | `204`. Each key must name adjacent strands of the current config. |
+| `GET /api/devices/:id/scenes` | `Scene[]` (`{ id, name, strandKey, ledCount, content, createdAt, updatedAt }`) |
+| `POST /api/devices/:id/scenes` `{ name, strandKey, content }` | `201 Scene` |
+| `PATCH /api/devices/:id/scenes/:sceneId` `{ name }` | `Scene` |
+| `DELETE /api/devices/:id/scenes/:sceneId` | `204` |
+| `POST /api/devices/:id/scenes/:sceneId/apply` | the new WLED state, plus `{ warnings: string[] }` |
+| `GET /api/devices/:id/looks` | `LookRecord[]` |
+| `POST /api/devices/:id/looks` `{ name, content }` | `201 LookRecord` |
+| `PATCH /api/devices/:id/looks/:lookId` `{ name }` | `LookRecord` |
+| `DELETE /api/devices/:id/looks/:lookId` | `204` |
+| `POST /api/devices/:id/looks/:lookId/apply` `{ targets: { strandKey, range?: string }[] }` | the new WLED state, plus `{ warnings: string[] }` |
+
+- Apply reads `/json/cfg`, `/json/state`, `/json/effects` and `/json/info`, builds the segment payload with the shared layout module, and sends one `POST /json/state` (two when the delete rule in section 6.2 splits it). Then it sends the paint (`seg.i`) requests, one per painted range. Then it writes the startup preset, unless the user declined it.
+- Apply returns `409 strand_changed` when the scene's strand key does not exist in the current config, and `422 segment_budget` when the result needs more segments than the device allows. The scene's LED-count warning is shown by the browser before it calls apply.
+- The browser builds the content of a new scene or look from the layout it shows. The server checks the shape and the limits: name 1-64 characters, at most 256 scenes and 256 looks per device, content at most 64 KB.
+- Live editing on the Lights tab stays on `PATCH /api/devices/:id/state`.
+- `GET /api/devices/:id/presets` (WLED presets) is not used by any screen. The plan removes it.
+
+**Shared layout module** (`shared/layout.ts`, pure functions, used by the browser and the server):
+
+- `strandsFromConfig(cfg, groupKeys): Strand[]`
+- `readLayout(state, strands, effects): { strands: StrandLayout[]; custom: Segment[] }`
+- `writeRange(state, strand, range, next, maxseg): SegPatch[]` and `writeStrand(...)`
+- `snapshotStrand(layout, paint?): StrandSnapshot`, `lookFromRange(range): Look`
+- `applyScene(state, strand, snapshot, effects, maxseg)` and `applyLook(state, targets, look, effects, maxseg)`, each returning `{ seg: SegPatch[]; paint: SegPatch[]; warnings: string[] }`
+
+Round-trip property, tested with generated layouts: `readLayout(apply(writeLayout(L)))` equals `L` for every layout `L` within the segment budget.
+
+## 10. Design spec update
+
+`docs/design/strand-wled-spec.html` gets the screens in section 7, built in the file's style (render functions, `A.*` actions, the `q()` cache):
+
+- The mock app server gains: `state.seg[]` and `info.leds.maxseg` on each seed, `getEffects`, `getPalettes`, `getLive`, the strand-group, scene and look functions, and segment handling in `patchState` (create, delete, geometry, `i`, `frz`). The "MOCK APP SERVER" comment lists the new endpoints, because it is the API contract.
+- Seeds: Backyard gets two strands with ranges (Every 2 and All) and a Custom segment; Front Roof one strand with Individual paint; Garage one strand with All.
+- Prototype controls: "Add a foreign segment" (to show a Custom segment) and "Fill the segment budget".
+
+## 11. Left to the builder
+
+- The color picker's exact layout, within the shadcn style.
+- The strip's cell scaling on strips longer than the screen width.
+- Keyboard details of the slot editor sheet, within the shadcn Sheet behavior.
+- The wording of warnings and empty states that this document does not give.
+
+## 12. My calls (not the owner's)
+
+1. Segment name tags (`·2/3`, `·paint`) as the primary way to read a layout back, with geometry as the fallback.
+2. Flash with a temporary top segment, not with `seg.i` on the range's own segment.
+3. Strand names as a preference; "Strand 1", "Strand 2" by default.
+4. Applying a look to a strand applies it to each range of the strand; ranges keep their positions.
+5. Scenes and looks are applied by the server (so that a later integration can call them), and live edits go from the browser through the state endpoint.
+6. Polling every 5 seconds on the Lights tab, paused during drags and while a slot editor is open.
+7. The strip shows configured colors, not live LED output.
+8. The existing `GET /api/devices/:id/presets` endpoint is removed.
+9. "Split by strand" or "Combine strands" as the two answers to a segment that spans uncombined strands; layout edits wait for the answer.
+10. Startup preset details: ID 250, the 5-second write delay, and the one-time question when another boot preset is set.
+11. Strand sends paint again when it turns a device or strand on, and shows "Restore paint" when another client turned it on.
