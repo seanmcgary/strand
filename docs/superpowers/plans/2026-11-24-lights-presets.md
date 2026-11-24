@@ -257,7 +257,7 @@ review: no
   - `type SimState = { on: boolean; bri: number; mainseg: number; slots: (SimSeg | null)[]; maxseg: number; ledCount: number; presets: Record<string, unknown>; bootps: number }`. A `null` slot is an empty slot.
   - `simFromState(state: { on; bri; seg: object[] }, maxseg: number, ledCount: number): SimState`.
   - `applyPost(sim: SimState, body: Record<string, unknown>): void`. It follows "Verified external API": global `on`/`bri` with the power-on unfreeze, `seg` arrays and objects by `id`, append, delete, purge, name clearing, the default color, byte wrap of `grp`/`spc`, `c3` clamp, `i` paint (pixels as `"#RRGGBB"`), and `psave` (apply, then store the cleaned body at `presets[id]`, and `bootps`).
-  - `bootSim(sim: SimState, def: { on: boolean; bri: number }): void`. It models `wled.cpp:683-691`: one segment over `[0, ledCount)`, `on` and `bri` from `def`, then `applyPost` of `presets[bootps]` when `bootps > 0`.
+  - `bootSim(sim: SimState, def: { on: boolean; bri: number }, opts?: { outputs?: { start: number; len: number }[] }): void`. It models `wled.cpp:683-691`: one segment over `[0, ledCount)`, or with `opts.outputs` one auto segment per output (`[start, start + len)`), `on` and `bri` from `def`, then `applyPost` of `presets[bootps]` when `bootps > 0`.
   - `listState(sim: SimState): { on: boolean; bri: number; mainseg: number; seg: object[] }`. Each listed segment has `id`, `start`, `stop`, `len`, `grp`, `spc`, `of`, `on`, `frz`, `bri` (255 when 0), `col`, `fx`, `sx`, `ix`, `pal`, `c1`-`c3`, `o1`-`o3`, `sel`, `rev`, `mi`, and `n` when set.
 - Produces, in `test/fakeWled.ts`:
   - The fake keeps a `SimState` built from the seed. `POST /json/state` and `POST /json` call `applyPost`. `GET /json/state` returns `listState`. `GET /presets.json` returns the seed presets merged with `sim.presets`. A `psave` with `bootps` sets `cfg.def.ps`. `restart()` also calls `bootSim` with `cfg.def`.
@@ -501,7 +501,7 @@ review: yes (in-memory timers, writes to device flash)
   - `createLightsRuntime(deps: AppDeps, log: RuntimeLog): LightsRuntime` with:
     - `afterWrite(row: DeviceRow): void`. It restarts the device's startup timer at `startupDelayMs`. When the timer fires:
       - If a save for this device is in flight, start the timer again.
-      - Else send `GET /json/state`, `GET /json/info` (for `maxseg`), and one `POST /json/state` with `buildStartupPreset`, with the paint from `paintFor`.
+      - Else send `GET /json/state`, `GET /json/info` (for `maxseg`) and `GET /presets.json`. The paint is preset 250's paint (`decodePaint`, with the same shape checks as `readDeviceLights`) with `paintFor` merged over it. A strand that was not edited since the last save thus keeps its paint. Then send one `POST /json/state` with `buildStartupPreset` and this paint.
       - On a failure, log `"startup preset save failed"`.
       - After a save succeeds, clear the device's paint memory.
     - `rememberPaint(deviceId: string, paint: PaintMap): void` (merge) and `paintFor(deviceId: string): PaintMap`.
@@ -530,10 +530,11 @@ review: yes (in-memory timers, writes to device flash)
 - [ ] **Step 1: Write the failing tests.**
   - `buildStartupPreset` with listed IDs 0 and 2, `maxseg` 4, and paint for "Peak paint" (ID 2) → `seg` is `[{id:0,...}, {id:1,stop:0}, {id:2,...,i:[...]}, {id:3,stop:0}]`; the object has no `on` and no `bri` key.
   - Review Focus 3: a listed segment "Strand flash" at ID 3 → `seg[3]` is `{ id: 3, stop: 0 }`. With `rememberPaint` set and no paint in `/presets.json`, the fired `psave` body has the remembered `i`.
-  - Boot: apply the startup preset body with `applyPost` to a sim, then `bootSim(sim, { on: false, bri: 128 })` → `listState` has `on: false` and the same segments, geometry and names as the state the body was built from. The same with a sim that started with two auto segments.
+  - Boot: apply the startup preset body with `applyPost` to a sim, then `bootSim(sim, { on: false, bri: 128 })` → `listState` has `on: false` and the same segments, geometry and names as the state the body was built from. The same with a sim that started with two auto segments: `bootSim(sim, { on: false, bri: 128 }, { outputs: [{ start: 0, len: 150 }, { start: 150, len: 150 }] })`.
   - Runtime against a fake, `startupDelayMs` 80: `afterWrite` twice, 30 ms apart → no `psave` before 80 ms after the second call, and exactly one `psave` request after 200 ms.
   - Save in flight: `startupDelayMs` 50, `fake.failNext("timeout", { method: "POST", path: "/json/state" })`, `afterWrite`, then `afterWrite` again at 70 ms → the second `psave` starts after the first request ends, never while it is in flight.
   - Paint memory: `rememberPaint`, `afterWrite`, the save succeeds → `paintFor` is `{}`.
+  - Paint kept across saves: paint strand A ("A paint"), `afterWrite`, let the save run (paint memory is cleared). Then paint strand B ("B paint"), `afterWrite`, let the save run → the second `psave` body has the `i` of "A paint" and of "B paint".
   - `close()` after `afterWrite` → no `psave` after 200 ms.
   - `startFlash` twice, 10 ms apart, `flashMs` 50 → the first `end` never runs; the second runs once.
   - `startFlash` with an `end` that rejects with `new Error("x")` → no unhandled rejection; the log stub got one call `({ deviceId, message: "x" }, "flash end failed")` and nothing else.
@@ -555,7 +556,7 @@ review: no
 - Test: `server/routes/lights.test.ts`, `server/routes/control.test.ts`
 
 **Interfaces:**
-- Consumes: `readDeviceLights`, `clearLeftovers`, `setDevicePower`, `deviceError`, `ServerDeps`, `LightsRuntime.startFlash`, `LightsRuntime.flashActive` (Task 7); `loadDevice` (prior Task 8); `FLASH_NAME`, `parseState` (Task 4); `strandGroups.list` (Task 1).
+- Consumes: `readDeviceLights`, `clearLeftovers`, `setDevicePower`, `deviceError`, `ServerDeps`, `LightsRuntime.startFlash`, `LightsRuntime.flashActive` (Task 7); `loadDevice` (prior Task 8); `FLASH_NAME`, `parseState` (Task 4); `strandGroups.list` (Task 1); `FakeWled.applyState`, `FakeWled.cfg` (Task 2; `cfg` is from prior Task 4) in the tests only.
 - Produces: `lightsRoutes(app: FastifyInstance, deps: ServerDeps)` with `GET lights`, `PATCH lights`, `POST lights/flash`. Tasks 9 and 10 add the other Lights endpoints to this file. `controlRoutes(app, deps: ServerDeps)`: `PATCH state` calls `setDevicePower` and answers its return value.
   - `GET lights`: `readDeviceLights`; answer `view`. It sends no `POST` and writes nothing to the database.
   - `PATCH lights`: `readDeviceLights`, `clearLeftovers`, `setDevicePower`, then `readDeviceLights`.
@@ -592,7 +593,7 @@ review: no
 - Test: `server/routes/lights.test.ts`
 
 **Interfaces:**
-- Consumes: `writeStrand`, `LayoutError`, `LayoutWrite` (Task 5); `readStrand`, `WledState`, `Strand` (Task 4); `readDeviceLights`, `clearLeftovers`, `writeLayout`, `deviceError` (Task 7); `strandGroups.list`, `strandGroups.replace` (Task 1).
+- Consumes: `writeStrand`, `LayoutError`, `LayoutWrite` (Task 5); `readStrand`, `WledState`, `Strand` (Task 4); `readDeviceLights`, `clearLeftovers`, `writeLayout`, `deviceError`, `ServerDeps` (Task 7); `strandGroups.list`, `strandGroups.replace` (Task 1); `FakeWled.applyState`, `FakeWled.afterPost`, `FakeOpts.maxBody` (Task 2) in the tests only.
 - Produces:
   - `PATCH lights/strands/:key` (`bodyLimit: 262144`): check the body (schema below), `readDeviceLights`, `clearLeftovers`, find the strand (`409 strand_changed`), `writeStrand` (it validates; `422 invalid_layout`), `writeLayout`. Answer the new `LightsView`.
     - Schema: `{ on?: boolean, bri?: integer 1-255, ranges?: RangeView[] }`, `minProperties: 1`. `RangeView`, `SlotView` and `Pattern` schemas have every field typed and `additionalProperties: false`; `name` max length 256, `ranges` max 256 items, `paint` max 65536 items. The `validateRanges` rules check the rest.
@@ -616,7 +617,7 @@ review: no
   - A layout that needs 2 more segments when 1 is free → `422 segment_budget`, body `need: 2`, message "This needs 2 more segments and 1 is free. Remove a range first."
   - `{}`, `{ ranges: "x" }`, `{ bri: 0 }`, `{ on: true, x: 1 }`, a slot with an extra key → `400 invalid_request`.
   - A strand with a foreign `grp 3` segment → its first `PATCH` overwrites that segment with `grp 1`.
-  - Write fails part-way, `startupDelayMs` 50: o0 with 8 segments written as one All range (two `seg` requests), `fake.failNext("timeout", { method: "POST", path: "/json/state", skip: 1 })` → `504 device_offline`; 200 ms later the fake got one `psave`.
+  - Write fails part-way, `startupDelayMs` 50: o0 with 8 segments written as one All range (three or more `seg` requests), `fake.failNext("timeout", { method: "POST", path: "/json/state", skip: 1 })` → `504 device_offline`; 200 ms later the fake got one `psave`.
   - Paint fails: an Individual range written with `fake.failNext("timeout", { method: "POST", path: "/json/state", skip: 1 })` (the paint request) → `504`; the segments are on the fake; 200 ms later one `psave`.
   - Paint segment gone: `fake.afterPost(() => fake.applyState({ seg: [{ id: <paint segment id>, n: "Other" }] }))` before an Individual write → `409 strand_changed`.
   - Largest paint (Q4): Front Roof, one Individual range over all 300 LEDs with a different random color on each LED → 200; every paint request has at most 256 runs; every request body is at most 10240 bytes (the fake's `maxBody`); the fake's pixels equal the paint. With `startupDelayMs` 50, the `psave` 200 ms later is accepted by the fake.
@@ -634,13 +635,13 @@ review: no
 - Test: `server/routes/lights.test.ts`, `server/routes/devices.test.ts`, `server/routes/preferences.test.ts`
 
 **Interfaces:**
-- Consumes: `strandGroups.list`, `strandGroups.replace`, `preferences.get`, `preferences.put`, `preferences.remove` (Task 1, prior Task 3); `writeStrand` (Task 5); `readDeviceLights`, `clearLeftovers`, `writeLayout`, `LightsRuntime.forget` (Task 7); `devicesRoutes`, `preferencesRoutes` (prior Tasks 6, 10).
+- Consumes: `strandGroups.list`, `strandGroups.replace`, `preferences.get`, `preferences.put`, `preferences.remove` (Task 1, prior Task 3); `writeStrand` (Task 5); `readDeviceLights`, `clearLeftovers`, `writeLayout`, `LightsRuntime.forget`, `ServerDeps` (Task 7); `devicesRoutes`, `preferencesRoutes` (prior Tasks 6, 10).
 - Produces:
   - `GET strand-groups` → `string[]`.
   - `PUT strand-groups { keys: string[] }` → `LightsView`.
     - Schema: `keys` is an array of strings that match `^o\d+(\+o\d+)+$`, max 64 items, `additionalProperties: false`. In the handler: more keys than outputs → `400 invalid_request`.
     - Each key names two or more existing outputs that touch in key order, and no output is in two keys. Else `422 not_adjacent`.
-    - For each group that is removed: if a range of the combined strand crosses a member boundary, cut the ranges at the boundaries. Each piece keeps the name, pattern and slots; paint is cut by position. Call `writeStrand` once on the combined strand with the cut ranges and `{ sharedNames: true }` (the two pieces share a name), then `writeLayout`. This write occurs before the groups change.
+    - For each group that is removed: if a range of the combined strand crosses a member boundary, cut the ranges at the boundaries. Each piece keeps the name, pattern and slots; paint is cut by position. A piece too short for its Every pattern (Plan decision 4) becomes All with its first slot, as `fitRanges` does. Call `writeStrand` once on the combined strand with the cut ranges and `{ sharedNames: true }` (the two pieces share a name), then `writeLayout`. This write occurs before the groups change.
     - Then save the groups. A new group needs no device write.
   - `PUT strand-names { names: Record<string, string> }` → `LightsView`.
     - Schema: `names` is an object, max 64 properties, keys match `^o\d+(\+o\d+)*$`, values are strings of max length 1024, `additionalProperties: false` at the top level.
@@ -656,7 +657,8 @@ review: no
   - `{ keys: ["o0"] }`, `{ keys: "o0+o1" }`, `{ keys: [], x: 1 }`, `{ keys: ["o0+o1", "o0+o1", "o0+o1"] }` (more keys than outputs) → `400 invalid_request`.
   - Combined strand with "Middle" All 100-200 → `PUT { keys: [] }` → listed segments include "Middle" 100-150 and "Middle" 150-200.
   - Combined strand with "Paint" Individual 100-200 whose LEDs 0-49 are red and 50-99 are blue → after `PUT { keys: [] }`, o0's "Paint" range is all red and o1's is all blue.
-  - Write before the groups change: combined strand with "Middle" 100-200, `fake.setMode("timeout")`, `PUT { keys: [] }` → `504`; `strandGroups.list` is still `["o0+o1"]`.
+  - Combined strand with "Dots" Every 3 group 2 at 146-200 → after `PUT { keys: [] }`, o0's "Dots" (146-150, 4 LEDs) is All with the first slot of "Dots", and o1's "Dots" (150-200) is still Every 3 group 2.
+  - Write before the groups change: combined strand with "Middle" 100-200, `fake.failNext("timeout", { method: "POST", path: "/json/state" })` (the reads succeed; only the write fails), `PUT { keys: [] }` → `504`; `strandGroups.list` is still `["o0+o1"]`.
   - `PUT strand-names { names: { o0: "Eaves" } }` → strand o0 name "Eaves". `{ o0: "  " }` → "Strand 1". `{ o9: "x" }` → `409 strand_changed`. A 65-character name → `422 invalid_name`, "Names need 1 to 64 characters." `{ names: { o0: 5 } }`, `{ names: {}, x: 1 }`, `{ names: { "a b": "x" } }` → `400 invalid_request`.
   - `PUT /api/preferences/strandNames.<id> { value: { o0: "x" } }` → `400 invalid_request`; the preference is unchanged.
   - `DELETE /api/devices/:id` → `preferences.get(db, "strandNames.<id>")` is `undefined`. With `startupDelayMs` 50, a strand write, then `DELETE` at once → no `psave` after 200 ms.
@@ -675,7 +677,7 @@ review: no
 - Test: `server/routes/presets.test.ts`
 
 **Interfaces:**
-- Consumes: `scenes`, `SceneRow` (Task 1); `snapshotStrand`, `sceneToPatch` (Task 6); `writeStrand` (Task 5); `readDeviceLights`, `clearLeftovers`, `writeLayout`, `deviceError`, `ServerDeps` (Task 7); `ApiError`, `messages` (Task 1).
+- Consumes: `scenes`, `SceneRow` (Task 1); `snapshotStrand`, `sceneToPatch` (Task 6); `writeStrand` (Task 5); `readDeviceLights`, `clearLeftovers`, `writeLayout`, `deviceError`, `ServerDeps` (Task 7); `ApiError`, `messages` (Task 1); `FakeWled.applyState`, `FakeWled.cfg` (Task 2; `cfg` is from prior Task 4) in the tests only.
 - Produces: `presetsRoutes(app: FastifyInstance, deps: ServerDeps)` with the scene endpoints of spec §9. Task 12 adds the look endpoints to this file.
   - `toScene(row: SceneRow): Scene` computes `summary`.
   - `GET`, `PATCH` and `DELETE` use only the database. `POST` and `apply` read the device.
@@ -710,7 +712,7 @@ review: no
 - Test: `server/routes/presets.test.ts`
 
 **Interfaces:**
-- Consumes: `looks`, `LookRow` (Task 1); `lookFromRange`, `lookToPatches` (Task 6); `segmentsNeeded`, `writeStrand` (Task 5); `readDeviceLights`, `clearLeftovers`, `writeLayout`, `deviceError` (Task 7); `presetsRoutes` (Task 11).
+- Consumes: `looks`, `LookRow` (Task 1); `lookFromRange`, `lookToPatches` (Task 6); `segmentsNeeded`, `writeStrand` (Task 5); `readDeviceLights`, `clearLeftovers`, `writeLayout`, `deviceError`, `ServerDeps` (Task 7); `presetsRoutes` (Task 11).
 - Produces: the look endpoints of spec §9.
   - Name rule (`POST` and `PATCH`): as in Task 11.
   - Schemas: `POST { name: string (max 1024), strandKey: string (pattern ^o\d+(\+o\d+)*$), range: string (max 64) }`; `PATCH { name: string (max 1024) }`; `apply { targets: LookTarget[] }` with `targets` 1-64 items, each `{ strandKey: string (pattern ^o\d+(\+o\d+)*$), range?: string (max 64) }`. All with `additionalProperties: false`, at every level.
@@ -833,9 +835,9 @@ review: yes (optimistic writes, one request in flight per strand, rollback)
 - Test: `src/store/slices/lights.test.ts`, `src/store/slices/preferences.test.ts`
 
 **Interfaces:**
-- Consumes: `api.getLights`, `api.patchStrand`, `api.resolveShared`, `api.flash`, `api.putStrandGroups`, `api.putStrandNames`, `api.getEffects`, `api.getPalettes`, `api.getConfig`, `api.getPreferences`, `api.putPreference` (Task 13, prior Task 11); `toast` (Task 14); `segsOf`, `freeSegs`, `needMsg` (Task 15); `createApiThunk` and its rejected-payload type `ApiError` (`{ status?, code?, message }`, `src/store/createApiThunk.ts`; prior Task 1); `LedOutput` (existing `shared/apiTypes.ts`).
+- Consumes: `api.getLights`, `api.patchStrand`, `api.resolveShared`, `api.flash`, `api.putStrandGroups`, `api.putStrandNames`, `api.getEffects`, `api.getPalettes`, `api.getConfig`, `api.getPreferences`, `api.putPreference` (Task 13, prior Task 11); `toast` (Task 14); `segsOf`, `freeSegs`, `needMsg` (Task 15); `createApiThunk` and its rejected-payload type `ThunkError` (`{ status?, code?, message }`, exported from `src/store/createApiThunk.ts`; prior Task 11); `LedOutput` (existing `shared/apiTypes.ts`).
 - Produces:
-  - State: `{ devices: Record<string, { view: LightsView | null; status: "idle" | "loading" | "ok" | "error"; error: ApiError | null; effects: Effect[] | null; palettes: Palette[] | null; fxStatus: "idle" | "loading" | "ok" | "error"; fxError: ApiError | null; outputs: LedOutput[] | null; outputsStatus: "idle" | "loading" | "ok" | "error"; outputsError: ApiError | null; selected: string | null; selRange: Record<string, number>; flash: { key: string; led: number } | null }>; writes: Record<string, { busy: boolean; base: LightsView | null; dirty: ("on" | "bri" | "ranges")[]; hold: boolean }> }`. Write key: `` `${deviceId}|${strandKey}` ``.
+  - State: `{ devices: Record<string, { view: LightsView | null; status: "idle" | "loading" | "ok" | "error"; error: ThunkError | null; effects: Effect[] | null; palettes: Palette[] | null; fxStatus: "idle" | "loading" | "ok" | "error"; fxError: ThunkError | null; outputs: LedOutput[] | null; outputsStatus: "idle" | "loading" | "ok" | "error"; outputsError: ThunkError | null; selected: string | null; selRange: Record<string, number>; flash: { key: string; led: number } | null }>; writes: Record<string, { busy: boolean; base: LightsView | null; dirty: ("on" | "bri" | "ranges")[]; hold: boolean }> }`. Write key: `` `${deviceId}|${strandKey}` ``.
   - Thunks:
     - `loadLights(id, opts?: { quiet?: boolean })`. With `quiet`, it does not set `status` to `loading`, and on a rejection it leaves the state as it is.
     - `loadFxLists(id)` (effects and palettes; sets `fxStatus` and `fxError`).
@@ -843,7 +845,7 @@ review: yes (optimistic writes, one request in flight per strand, rollback)
     - `editStrand({ id, key, patch: Partial<Pick<StrandView, "on" | "bri" | "ranges">> }): boolean`, `beginPaint({ id, key })`, `endPaint({ id, key })`, `flashLed({ id, key, led })`, `adoptView({ id, view })`.
     - `resolveShared({ id, key, action })`. On success: adopt the view. For `combine`, select the joined key (members sorted by output index) and `toast("success", "Strands combined", "They're one strand now.")`. For `split`, `toast("success", "Split by strand", "Each strand has its own range now.")`. On an error: the lights error path (queue step 4).
     - `setStrandGroups({ id, keys })`: fulfills with the view and adopts it; on an error, the lights error path, then it rejects.
-    - `setStrandName({ id, key, name })`: fulfills with the view and adopts it; on an error it rejects with the `ApiError` payload and does not toast (the rename dialog shows the message).
+    - `setStrandName({ id, key, name })`: fulfills with the view and adopts it; on an error it rejects with the `ThunkError` payload and does not toast (the rename dialog shows the message).
   - Actions: `selectStrand({ id, key })`, `selectRange({ id, key, i })`, `paintCells({ id, key, i, from, to, color })`.
   - Selectors: `selectLights(state, id)`, `selectedStrand(state, id)` (the selected strand, else the first).
   - Preferences slice: `{ recentColors: string[]; favoriteEffects: string[]; loaded: boolean }`; thunks `loadPreferences()` (keys `recentColors`, `favorites.effects`), `pushRecentColor(hex)` (front, unique, at most 8, then `putPreference`), `toggleFavoriteEffect(name)`.
@@ -1067,9 +1069,9 @@ review: yes (destructive delete with confirmation; apply changes the lights)
 - Test: `src/store/slices/presets.test.ts`, `src/components/presets/presetsTab.test.tsx`
 
 **Interfaces:**
-- Consumes: `api.getScenes`, `api.createScene`, `api.renameScene`, `api.deleteScene`, `api.applyScene`, `api.getLooks`, `api.createLook`, `api.renameLook`, `api.deleteLook`, `api.applyLook` (Task 13); `adoptView`, `loadLights`, `selectStrand` (Task 16); `createApiThunk` and its rejected-payload type `ApiError` (`src/store/createApiThunk.ts`); `toast`, `Button`, `Badge`, `Skeleton`, `Dialog*`, `DropdownMenu*` (Task 14); `patternText`, `rangeLabel`, `plural` (Task 15).
+- Consumes: `api.getScenes`, `api.createScene`, `api.renameScene`, `api.deleteScene`, `api.applyScene`, `api.getLooks`, `api.createLook`, `api.renameLook`, `api.deleteLook`, `api.applyLook` (Task 13); `adoptView`, `loadLights`, `selectStrand` (Task 16); `createApiThunk` and its rejected-payload type `ThunkError` (exported from `src/store/createApiThunk.ts`; prior Task 11); `toast`, `Button`, `Badge`, `Skeleton`, `Dialog*`, `DropdownMenu*` (Task 14); `patternText`, `rangeLabel`, `plural` (Task 15).
 - Produces:
-  - `presetsSlice`: `{ byDevice: Record<string, { scenes: Scene[] | null; looks: LookRecord[] | null; status: "idle" | "loading" | "ok" | "error"; error: ApiError | null; applying: string | null }> }`; thunks `loadPresets(id)` (lights, scenes and looks), `createScene`, `renameScene`, `deleteScene`, `applyScene`, `createLook`, `renameLook`, `deleteLook`, `applyLook`.
+  - `presetsSlice`: `{ byDevice: Record<string, { scenes: Scene[] | null; looks: LookRecord[] | null; status: "idle" | "loading" | "ok" | "error"; error: ThunkError | null; applying: string | null }> }`; thunks `loadPresets(id)` (lights, scenes and looks), `createScene`, `renameScene`, `deleteScene`, `applyScene`, `createLook`, `renameLook`, `deleteLook`, `applyLook`.
   - Apply results (design lines 5630-5640 and 5745-5770):
     - A scene apply adopts `view` into the lights slice, selects the scene's strand, and toasts `"Applied <name>"` with the warnings joined by `" "` as the description.
     - A look apply adopts `view`, closes the dialog, and toasts `"Applied <name>"` with the description `` `Changed ${plural(n, "range")}. ${warnings.join(" ")}`.trim() `` (n = the ranges of the targets).
@@ -1174,7 +1176,7 @@ These five conditions are the most likely to hurt a user, and the spec's example
 | Q9 | Tasks 7, 18-20 | Consumes name tasks, not symbols | Quality | LOW | Fix | Exact symbols listed and checked against producers. |
 | Q10 | Task 19 | Same as ST1 | Quality | HIGH | Fix | See ST1. |
 | Q11 | Tasks 19-21 | No seam for the slot sheet and paint editor | Quality | MEDIUM | Fix | `onOpenSlot` and `paintEditor` props; Tasks 20 and 21 fill them in `lightsTab.tsx`. |
-| Q12 | Task 16 | New `ApiErrorPayload` duplicates `ApiError` | Quality | LOW | Fix | Uses the rejected-payload type `ApiError` of `createApiThunk.ts`. If prior Task 11 renames that type, use its new name. |
+| Q12 | Task 16 | New `ApiErrorPayload` duplicates `ApiError` | Quality | LOW | Fix | Uses the rejected-payload type `ThunkError` of `createApiThunk.ts` (prior Task 11). |
 | Q13 | Task 7 | `writeLayout` partial-failure behavior not stated | Quality | HIGH | Fix | `afterWrite` after any sent request; missing paint segment → 409; browser does a quiet re-read. Tests in Task 9 (outermost surface). |
 | Q14 | Task 12 | Look apply partial failure not stated | Quality | MEDIUM | Fix | Earlier strands stay written; error answered; quiet re-read; test. |
 | Q15 | Task 22 | No UI result for apply, rename and delete errors | Quality | MEDIUM | Fix | With F2. |
@@ -1209,3 +1211,10 @@ These five conditions are the most likely to hurt a user, and the spec's example
 | F18 | Task 19 | Rename range on a shared strand | Frontend and seam | LOW | Fix | Disabled with `LOCKED`; test. |
 | F19 | Task 16 | Client budget differs from the server on `normalize` strands | Frontend and seam | MEDIUM | Fix | Client skips the check on `normalize` strands and uses the server's 422; test. |
 | F20 | Task 20 | Hue/saturation drag sends on every move | Frontend and seam | MEDIUM | Fix | Commit on `pointerup`/`pointercancel`; test. |
+| R1 | Task 7 | Startup save loses paint of strands not edited since the last save | Quality (re-review) | HIGH | Fix | The timer reads `/presets.json` and merges `paintFor` over preset 250's decoded paint; test with two saves. |
+| R2 | Task 10 | "Write before the groups change" test fails the reads too | Quality (re-review) | MEDIUM | Fix | `fake.failNext("timeout", { method: "POST", path: "/json/state" })`; only the write fails. |
+| R3 | Task 10 | Separate cut can leave an Every piece too short | Quality (re-review) | MEDIUM | Fix | The piece becomes All with its first slot, as `fitRanges` does; test. |
+| R4 | Tasks 2, 7 | `bootSim` cannot make two auto segments | Quality (re-review) | MEDIUM | Fix | `bootSim` takes `opts.outputs`; the Task 7 Boot test uses it. |
+| R5 | Tasks 16, 22 | Rejected-payload type named `ApiError`, with a hedge | Quality (re-review) | LOW | Fix | `ThunkError`, exported from `src/store/createApiThunk.ts`; hedge removed. |
+| R6 | Task 9 | Request count in "Write fails part-way" | Quality (re-review) | LOW | Fix | "three or more `seg` requests". |
+| R7 | Tasks 8-12 | Consumes leave out fake and `ServerDeps` symbols | Quality (re-review) | LOW | Fix | `FakeWled.applyState`, `FakeWled.afterPost`, `FakeOpts.maxBody`, `FakeWled.cfg` (Task 2) and `ServerDeps` (Task 7) added. |
