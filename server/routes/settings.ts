@@ -21,7 +21,10 @@ export function loadDevice(deps: AppDeps, id: string): DeviceRow {
 /** Reads `/json/info` and records that the device answered (spec §7). */
 export async function readInfo(deps: AppDeps, row: DeviceRow): Promise<WledInfo> {
   const info = await deviceRequest<WledInfo>(deps, targetOf(row), "/json/info");
-  devices.recordSeen(deps.db, row.id, { name: info.name || row.name, lastIp: row.lastIp }, deps.now());
+  // A recovery during the request saved the new address, so read it back instead of writing the old one.
+  const lastIp = devices.get(deps.db, row.id)?.lastIp ?? row.lastIp;
+  const name = typeof info.name === "string" && info.name !== "" ? info.name : row.name;
+  devices.recordSeen(deps.db, row.id, { name, lastIp }, deps.now());
   return info;
 }
 
@@ -41,6 +44,19 @@ export function toWledConfig(cfg: WledConfigFull): WledConfig {
     if: { sync: sub(cfg.if).sync },
   } as WledConfig;
 }
+
+function isPinInfo(v: unknown): v is PinInfo {
+  return (
+    isObject(v) &&
+    Number.isInteger(v.p) &&
+    typeof v.c === "number" &&
+    typeof v.a === "boolean" &&
+    (v.n === undefined || typeof v.n === "string")
+  );
+}
+
+const isNetwork = (v: unknown): v is WifiNetwork =>
+  isObject(v) && typeof v.ssid === "string" && typeof v.rssi === "number" && typeof v.channel === "number" && typeof v.enc === "number";
 
 async function readCapabilities(deps: AppDeps, row: DeviceRow): Promise<Capabilities & { maxGpio: number }> {
   const text = await deviceRequest<string>(deps, targetOf(row), "/settings/s.js?p=2", { parse: "text" });
@@ -68,7 +84,7 @@ export async function settingsRoutes(app: FastifyInstance, deps: AppDeps): Promi
     const row = loadDevice(deps, request.params.id);
     // 0.15 has no `/json/pins`: the path answers with the full `/json` reply, which has no `pins` key.
     const reply = await deviceRequest<{ pins?: unknown }>(deps, targetOf(row), "/json/pins");
-    if (Array.isArray(reply.pins)) return { pins: reply.pins as PinInfo[] };
+    if (Array.isArray(reply.pins)) return { pins: reply.pins.filter(isPinInfo) };
     const caps = await readCapabilities(deps, row);
     const cfg = await deviceRequest<WledConfigFull>(deps, targetOf(row), "/json/cfg");
     return { pins: pinsFromCapabilities(caps, cfg) };
@@ -78,8 +94,11 @@ export async function settingsRoutes(app: FastifyInstance, deps: AppDeps): Promi
     const row = loadDevice(deps, request.params.id);
     for (let i = 0; i < SCAN_REQUESTS; i++) {
       // The first request starts the scan and returns an empty list.
-      const reply = await deviceRequest<{ networks?: (WifiNetwork & { bssid?: string })[] }>(deps, targetOf(row), "/json/net");
-      if (Array.isArray(reply.networks) && reply.networks.length > 0) {
+      const reply = await deviceRequest<{ networks?: unknown }>(deps, targetOf(row), "/json/net");
+      if (!isObject(reply) || !Array.isArray(reply.networks) || !reply.networks.every(isNetwork)) {
+        throw new ApiError(502, "device_error", messages.deviceError(row.name, "the scan reply is not valid"));
+      }
+      if (reply.networks.length > 0) {
         return { networks: reply.networks.map(({ ssid, rssi, channel, enc }) => ({ ssid, rssi, channel, enc })) };
       }
       if (i < SCAN_REQUESTS - 1) await new Promise((resolve) => setTimeout(resolve, deps.scanDelayMs));

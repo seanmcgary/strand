@@ -3,6 +3,9 @@ import type { Capabilities, PinInfo, WledConfigFull } from "../../shared/apiType
 /** The `c` bit of an input-only GPIO (`pin_manager.h`). */
 const INPUT_ONLY = 0x20;
 
+/** The largest `d.max_gpio` accepted. The largest real chip has 49 GPIOs. */
+const MAX_GPIO = 256;
+
 type Parsed = Capabilities & { maxGpio: number };
 
 /**
@@ -18,6 +21,8 @@ export function parseCapabilities(text: string): Parsed | null {
   const inputOnlyPins = parseIntList(text, "ro_gpio");
   const maxGpio = /\bd\.max_gpio=(\d+);/.exec(text)?.[1];
   if (!ledTypes || !limits || !reservedPins || !inputOnlyPins || maxGpio === undefined) return null;
+  // The number sizes the pin list, so a device cannot make it large.
+  if (Number(maxGpio) > MAX_GPIO) return null;
   return { ledTypes, limits, reservedPins, inputOnlyPins, maxGpio: Number(maxGpio) };
 }
 

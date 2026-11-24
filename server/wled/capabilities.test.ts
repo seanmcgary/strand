@@ -38,6 +38,7 @@ describe("parseCapabilities", () => {
   it.each([
     ["an unknown bLimits argument count", fixture("sjsUnsupported.txt")],
     ["no ledTypes", fixture("sjsV17.txt").replace(/d\.ledTypes=\[.*?\];/, "")],
+    ["a max_gpio of 257", fixture("sjsV17.txt").replace("d.max_gpio=40;", "d.max_gpio=257;")],
     ["a cut-off ledTypes", "function GetV(){var d=document;d.ledTypes=[{i:1,c:"],
   ])("returns null for %s", (_name, text) => {
     expect(parseCapabilities(text)).toBeNull();

@@ -34,6 +34,20 @@ describe("GET info", () => {
   });
 });
 
+describe("GET info address recovery", () => {
+  // Fails if readInfo writes back the address it started with and undoes the one recovery just saved.
+  it("keeps the address that deviceRequest recovered", async () => {
+    const t = makeTestApp({ resolveA: async () => "127.0.0.1" });
+    const f = await startFakeWled(seeds.backyard);
+    fakes.push(f);
+    const row = t.addFake(f, seeds.backyard, "backyard.local");
+    devices.setLastIp(t.db, row.id, "127.0.0.2", new Date());
+    const res = await t.inject({ method: "GET", url: `/api/devices/${row.id}/info` });
+    expect(res.statusCode).toBe(200);
+    expect(devices.get(t.db, row.id)!.lastIp).toBe("127.0.0.1");
+  });
+});
+
 describe("GET config", () => {
   // Fails if the reply carries a key outside WledConfig (def.ps, hw.btn, if.mqtt) or drops one of its subtrees.
   it("returns only the subtrees of WledConfig, with def as on and bri", async () => {
@@ -81,6 +95,7 @@ describe("GET pins", () => {
   it("returns the device's list on 17", async () => {
     const { t, url } = await setup({ version: "17" });
     const res = await t.inject({ method: "GET", url: url("pins") });
+    expect(res.statusCode).toBe(200);
     expect(res.json<{ pins: PinInfo[] }>().pins).toEqual(seeds.backyard.pins);
   });
 
