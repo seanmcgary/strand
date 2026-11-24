@@ -6,6 +6,7 @@ import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "./app";
 import { loadConfig } from "./config";
+import { makeTestApp } from "../test/testApp";
 
 const INDEX = "<!doctype html><title>index</title>";
 let webDistDir: string;
@@ -68,5 +69,56 @@ describe("buildApp", () => {
   it("does not fall back for POST", async () => {
     const res = await app.inject({ method: "POST", url: "/devices/x", headers: { host: "localhost" } });
     expect(res.statusCode).toBe(404);
+  });
+});
+
+describe("request guard on every route", () => {
+  const writes: [string, string, object | undefined][] = [
+    ["POST", "/api/devices", { host: "10.0.0.5" }],
+    ["POST", "/api/devices/probe", { host: "10.0.0.5" }],
+    ["DELETE", "/api/devices/x", undefined],
+    ["PATCH", "/api/devices/x/config", { name: "n" }],
+    ["POST", "/api/devices/x/unlock", {}],
+    ["POST", "/api/devices/x/reboot", {}],
+    ["POST", "/api/devices/x/networks/scan", {}],
+    ["PATCH", "/api/devices/x/state", { on: true }],
+    ["PUT", "/api/preferences/k", { value: "v" }],
+  ];
+  const variants: [string, Record<string, string>][] = [
+    ["no x-strand-request", { host: "localhost" }],
+    ["a foreign origin", { host: "localhost", "x-strand-request": "1", origin: "http://evil.example.com" }],
+    ["a foreign host", { host: "evil.example.com", "x-strand-request": "1" }],
+  ];
+  const cases = writes.flatMap(([method, url, payload]) =>
+    variants.map(([variant, headers]) => ({ method, url, payload, variant, headers })),
+  );
+
+  // Fails if a route is registered outside the /api guard.
+  it.each(cases)("rejects $method $url with $variant", async ({ method, url, payload, headers }) => {
+    const t = makeTestApp();
+    const res = await t.app.inject({
+      method: method as "POST",
+      url,
+      headers: { ...headers, ...(payload ? { "content-type": "application/json" } : {}) },
+      payload,
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toEqual(expect.objectContaining({ error: "invalid_request" }));
+  });
+
+  const reads = [
+    "/api/devices",
+    "/api/discovery",
+    "/api/preferences",
+    ...["info", "config", "capabilities", "pins", "state", "effects", "palettes", "pending-reboot"].map(
+      (r) => `/api/devices/x/${r}`,
+    ),
+  ];
+
+  // Fails if a route is registered outside the /api guard.
+  it.each(reads)("rejects GET %s with a foreign host", async (url) => {
+    const t = makeTestApp();
+    const res = await t.app.inject({ method: "GET", url, headers: { host: "evil.example.com" } });
+    expect(res.statusCode).toBe(403);
   });
 });

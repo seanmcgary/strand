@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from "fastify";
 import fastifyStatic from "@fastify/static";
 import type { Config } from "./config";
+import type { browseWled, resolveA } from "./mdns";
 import { ApiError, registerErrorHandler } from "./errors";
 import { controlRoutes } from "./routes/control";
 import { devicesRoutes } from "./routes/devices";
@@ -15,10 +16,7 @@ import { serializeRequestForLog } from "./requestLogSerializer";
 export interface AppDeps {
   config: Config;
   db: DatabaseSync;
-  mdns: {
-    browseWled(windowMs: number): Promise<{ host: string; port: number; addresses: string[] }[]>;
-    resolveA(host: string, timeoutMs: number): Promise<string | null>;
-  };
+  mdns: { browseWled: typeof browseWled; resolveA: typeof resolveA };
   now: () => Date;
   /** The port of WLED devices: 80 in production. */
   wledPort: number;
