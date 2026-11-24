@@ -68,7 +68,9 @@ export async function readInfo(deps: AppDeps, row: DeviceRow): Promise<WledInfo>
       pwr: leds.pwr,
       maxpwr: leds.maxpwr,
       maxseg: leds.maxseg,
-      ...(isObject(leds.matrix) ? { matrix: { w: leds.matrix.w, h: leds.matrix.h } } : {}),
+      ...(isObject(leds.matrix) && typeof leds.matrix.w === "number" && typeof leds.matrix.h === "number"
+        ? { matrix: { w: leds.matrix.w, h: leds.matrix.h } }
+        : {}),
     },
     live: raw.live,
   } as WledInfo;

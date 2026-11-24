@@ -6,7 +6,7 @@ export function list(db: DatabaseSync, deviceId: string): string[] {
   .map((r) => r.strand_key);
 }
 
-/** Replaces the device's combined strand keys, in one transaction. */
+/** Replaces the device's combined strand keys, in one transaction. It runs its own BEGIN, so never call it inside another transaction. */
 export function replace(db: DatabaseSync, deviceId: string, keys: string[]): void {
   db.exec("BEGIN");
   try {

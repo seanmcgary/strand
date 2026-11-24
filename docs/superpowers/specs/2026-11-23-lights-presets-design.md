@@ -377,10 +377,14 @@ On a 2D device (`matrix: true`) the view has no strands, the tab shows the §3 m
 - `segmentsNeeded(state: WledState, strand: Strand, next: StrandPatch, lists: Lists, paint: PaintMap): number`
 - `writeStrand(state: WledState, strand: Strand, next: StrandPatch, lists: Lists, paint: PaintMap, maxseg: number, opts?: { sharedNames?: boolean }): LayoutWrite`, where `LayoutWrite = { seg: SegPatch[][]; paint: { name: string; i: (number | string)[] }[] }` (one `seg` array per request). It throws `LayoutError` (`segment_budget`, `invalid_layout` or `shared`).
 
-The snapshot functions:
+`server/lights/snapshots.ts` turns scenes and looks into strand content:
 
-- `snapshotStrand(view, key): StrandSnapshot`, `lookFromRange(range): Look`
-- `applyScene(state, strand, snapshot, effects, maxseg)` and `applyLook(state, targets, look, effects, maxseg)`, each returning `{ seg: SegPatch[]; paint: SegPatch[]; warnings: string[] }`
+- `snapshotStrand(view: StrandView): StrandSnapshot`, `lookFromRange(range: RangeView): Look`
+- `fitRanges(ranges: RangeSnapshot[], len: number): { ranges: RangeSnapshot[]; warnings: string[] }`, `resolveSlot(slot: SlotLook, lists: Lists): { slot: SlotLook; warnings: string[] }`
+- `sceneToPatch(snapshot: StrandSnapshot, ledCount: number, strand: Strand, lists: Lists): { next: StrandPatch; warnings: string[] }`
+- `lookToPatches(look: Look, targets: { strand: StrandView; range?: string }[], lists: Lists): { patches: { key: string; next: StrandPatch }[]; warnings: string[] }`
+
+They return the next strand content (`StrandPatch`), not segment patches. The endpoint passes each one to `writeStrand`, one strand at a time, so two strands never get the same new segment ID.
 
 Round-trip property, tested with generated layouts: `readLayout(apply(writeStrand(L)))` equals `L` for every layout `L` within the segment budget.
 
