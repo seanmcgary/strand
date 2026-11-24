@@ -196,6 +196,14 @@ export function mergeInto(fxs: Effect[] | null, pals: Palette[] | null, rs: Rang
 
 /** The DOM id of the strip handle between range `i` and `i + 1` of strand `key`, for moving focus to it. */
 export const handleId = (key: string, i: number): string => `h-${key}-${i}`
+/** The DOM id of a range card's header button. */
+export const rangeHeaderId = (key: string, i: number): string => `range-${key}-${i}-hdr`
+/** The DOM id of a range card's ⋯ button. */
+export const rangeMenuId = (key: string, i: number): string => `range-${key}-${i}-btn`
+/** The DOM id of a strand's ⋯ button. */
+export const strandMenuId = (key: string): string => `strand-${key}-btn`
+/** The DOM id of the strand picker's Combine… button. */
+export const COMBINE_BUTTON_ID = "strands-combine-btn"
 
 /**
  * Moves the boundary between range `i` and `i + 1` to `led`, snapped to a whole LED and kept where both

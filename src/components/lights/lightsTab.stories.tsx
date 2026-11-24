@@ -18,7 +18,18 @@ const meta = {
     lights: lights(v),
     strand: v.strands[0]!,
     prefs: { recentColors: [], favoriteEffects: [], loaded: true },
-    actions: { editStrand: () => true, selectStrand: noop, selectRange: noop, resolveShared: noop, loadLights: noop, toast: noop },
+    actions: {
+      editStrand: () => true,
+      selectStrand: noop,
+      selectRange: noop,
+      resolveShared: noop,
+      loadLights: noop,
+      toast: noop,
+      flashLed: noop,
+      setStrandGroups: () => ({ unwrap: () => Promise.resolve() }),
+      setStrandName: () => ({ unwrap: () => Promise.resolve() }),
+      loadOutputs: noop,
+    },
   },
 } satisfies Meta<typeof LightsTab>
 export default meta

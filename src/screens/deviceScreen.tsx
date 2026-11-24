@@ -33,13 +33,17 @@ import {
 import { fetchDevices } from "@/store/slices/devices"
 import {
   editStrand,
+  flashLed,
   loadFxLists,
   loadLights,
+  loadOutputs,
   resolveShared,
   selectLights,
   selectRange,
   selectStrand,
   selectedStrand,
+  setStrandGroups,
+  setStrandName,
   type DeviceLights,
 } from "@/store/slices/lights"
 import { loadPreferences, type PreferencesState } from "@/store/slices/preferences"
@@ -106,6 +110,10 @@ const actions = {
   selectStrand,
   selectRange,
   resolveShared,
+  flashLed,
+  setStrandGroups,
+  setStrandName,
+  loadOutputs,
   toast,
 }
 /** What dispatching each action returns: a thunk's own result, else the action. */

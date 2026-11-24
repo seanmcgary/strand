@@ -1,12 +1,15 @@
 import { compose, withHandlers, withState } from "recompose"
 import type { Device, RangeView, StrandPatch, StrandView } from "../../../shared/apiTypes"
+import { LightsDialogs, type LightsDialog } from "@/components/lights/lightsDialogs"
+import { RangeCard } from "@/components/lights/rangeCard"
 import { StrandPanel } from "@/components/lights/strandPanel"
 import { StrandPicker } from "@/components/lights/strandPicker"
 import { Button } from "@/components/ui/button"
 import { Icon } from "@/components/ui/icon"
 import { Skeleton } from "@/components/ui/skeleton"
-import { handleId, nextRangeName, splitRange } from "@/lights/model"
+import { freeSegs, handleId, mergeInto, nextRangeName, rangeHeaderId, splitRange } from "@/lights/model"
 import { cn } from "@/lib/utils"
+import type { ThunkError } from "@/store/createApiThunk"
 import type { DeviceLights } from "@/store/slices/lights"
 import type { PreferencesState } from "@/store/slices/preferences"
 import type { ToastKind } from "@/store/slices/toasts"
@@ -25,10 +28,13 @@ export interface LightsActions {
   resolveShared: (a: { id: string; key: string; action: "split" | "combine" }) => unknown
   loadLights: (id: string, opts?: { quiet?: boolean }) => unknown
   toast: (kind: ToastKind, title: string, desc?: string) => unknown
+  flashLed: (a: { id: string; key: string; led: number }) => unknown
+  /** Rejects with the store's error; the store has toasted it. */
+  setStrandGroups: (a: { id: string; keys: string[] }) => { unwrap: () => Promise<unknown> }
+  /** Rejects with a `ThunkError` the caller shows. */
+  setStrandName: (a: { id: string; key: string; name: string }) => { unwrap: () => Promise<unknown> }
+  loadOutputs: (id: string) => unknown
 }
-
-/** A dialog the strand menu or the picker opened. */
-type LightsDialog = { kind: "rename" | "separate"; key: string } | { kind: "combine" }
 
 /** The slot the slot sheet edits. */
 type SlotTarget = { key: string; i: number; s: number }
@@ -62,6 +68,19 @@ interface HandlerProps {
   onResolve: (action: "split" | "combine") => void
   onRename: () => void
   onSeparate: () => void
+  onSelectRange: (i: number) => void
+  onFlash: (led: number) => void
+  onRenameRange: (i: number) => void
+  onMergeNext: (i: number) => void
+  onDeleteRange: (i: number) => void
+  onRange: (i: number, next: RangeView) => void
+  onOpenSlot: (i: number, s: number) => void
+  onCloseDialog: () => void
+  onRetryOutputs: () => void
+  onSaveRangeName: (key: string, i: number, name: string) => void
+  onSaveStrandName: (key: string, name: string) => Promise<string | null>
+  onConfirmCombine: (a: StrandView, b: StrandView) => Promise<void>
+  onConfirmSeparate: (key: string) => Promise<void>
 }
 
 type BaseProps = LightsTabProps & LocalProps
@@ -161,8 +180,44 @@ function LightsTabView(props: Props) {
             onRename={props.onRename}
             onSeparate={props.onSeparate}
           />
+          <section aria-label="Ranges">
+            <ul className="flex flex-col gap-2">
+              {st.ranges.map((_, i) => (
+                <RangeCard
+                  key={`${st.key}-${i}`}
+                  strand={st}
+                  i={i}
+                  free={freeSegs(v)}
+                  effects={lights.effects}
+                  palettes={lights.palettes}
+                  onSelect={props.onSelectRange}
+                  onFlash={props.onFlash}
+                  onRename={props.onRenameRange}
+                  onMergeNext={props.onMergeNext}
+                  onDelete={props.onDeleteRange}
+                  onRange={props.onRange}
+                  onOpenSlot={(s) => props.onOpenSlot(i, s)}
+                />
+              ))}
+            </ul>
+          </section>
         </>
       )}
+      {props.dialog ? (
+        <LightsDialogs
+          dialog={props.dialog}
+          view={v}
+          outputs={lights.outputs}
+          outputsStatus={lights.outputsStatus}
+          outputsError={lights.outputsError}
+          onRetryOutputs={props.onRetryOutputs}
+          onClose={props.onCloseDialog}
+          onRenameRange={props.onSaveRangeName}
+          onRenameStrand={props.onSaveStrandName}
+          onCombine={props.onConfirmCombine}
+          onSeparate={props.onConfirmSeparate}
+        />
+      ) : null}
     </div>
   )
 }
@@ -170,6 +225,19 @@ function LightsTabView(props: Props) {
 /** Sends a strand edit for the selected strand. */
 const edit = (p: BaseProps, patch: StrandPatch): boolean =>
   !!p.strand && p.actions.editStrand({ id: p.device.id, key: p.strand.key, patch })
+
+/**
+ * Focuses a range card's header once the edit has rendered. The second timeout runs after the range
+ * menu's own close, which puts focus back on its ⋯ button.
+ */
+const focusHeader = (key: string, i: number) =>
+  setTimeout(() => setTimeout(() => document.getElementById(rangeHeaderId(key, i))?.focus()))
+
+/** The new combinations after a change: the device's other combined strands, plus `add`. */
+const groupsWithout = (p: BaseProps, drop: string[], add: string[]): string[] => [
+  ...(p.lights.view?.strands ?? []).filter((s) => s.key.includes("+") && !drop.includes(s.key)).map((s) => s.key),
+  ...add,
+]
 
 export const LightsTab = compose<Props, LightsTabProps>(
   withState("slotTarget", "setSlotTarget", null),
@@ -210,7 +278,77 @@ export const LightsTab = compose<Props, LightsTabProps>(
       if (p.strand) p.setDialog({ kind: "rename", key: p.strand.key })
     },
     onSeparate: (p) => () => {
-      if (p.strand) p.setDialog({ kind: "separate", key: p.strand.key })
+      if (!p.strand) return
+      p.actions.loadOutputs(p.device.id)
+      p.setDialog({ kind: "separate", key: p.strand.key })
+    },
+    onSelectRange: (p) => (i: number) => {
+      if (p.strand) p.actions.selectRange({ id: p.device.id, key: p.strand.key, i })
+    },
+    onFlash: (p) => (led: number) => {
+      if (p.strand) p.actions.flashLed({ id: p.device.id, key: p.strand.key, led })
+    },
+    onRenameRange: (p) => (i: number) => {
+      if (p.strand) p.setDialog({ kind: "rename", key: p.strand.key, i })
+    },
+    onMergeNext: (p) => (i: number) => {
+      const st = p.strand
+      if (!st || !edit(p, { ranges: mergeInto(p.lights.effects, p.lights.palettes, st.ranges, i, i + 1) })) return
+      focusHeader(st.key, i)
+    },
+    onDeleteRange: (p) => (i: number) => {
+      const st = p.strand
+      const r = st?.ranges[i]
+      if (!st || !r) return
+      const pv = st.ranges[i - 1]
+      const intoPrev = !!pv && pv.start + pv.len === r.start
+      const into = intoPrev ? pv : st.ranges[i + 1]
+      if (!into || !edit(p, { ranges: mergeInto(p.lights.effects, p.lights.palettes, st.ranges, intoPrev ? i - 1 : i + 1, i) })) return
+      p.actions.toast("info", `Deleted ${r.name}`, `Its LEDs are part of ${into.name} now.`)
+      // The range that took the LEDs is at i - 1, or moves up to i.
+      focusHeader(st.key, intoPrev ? i - 1 : i)
+    },
+    onRange: (p) => (i: number, next: RangeView) => {
+      if (p.strand) edit(p, { ranges: p.strand.ranges.with(i, next) })
+    },
+    onOpenSlot: (p) => (i: number, s: number) => {
+      if (p.strand) p.setSlotTarget({ key: p.strand.key, i, s })
+    },
+    onCloseDialog: (p) => () => p.setDialog(null),
+    onRetryOutputs: (p) => () => {
+      p.actions.loadOutputs(p.device.id)
+    },
+    onSaveRangeName: (p) => (key: string, i: number, name: string) => {
+      const st = p.lights.view?.strands.find((s) => s.key === key)
+      const r = st?.ranges[i]
+      if (st && r) p.actions.editStrand({ id: p.device.id, key, patch: { ranges: st.ranges.with(i, { ...r, name }) } })
+    },
+    onSaveStrandName: (p) => async (key: string, name: string) => {
+      try {
+        await p.actions.setStrandName({ id: p.device.id, key, name }).unwrap()
+        return null
+      } catch (e) {
+        return (e as ThunkError).message
+      }
+    },
+    onConfirmCombine: (p) => async (a: StrandView, b: StrandView) => {
+      const key = `${a.key}+${b.key}`
+      try {
+        await p.actions.setStrandGroups({ id: p.device.id, keys: groupsWithout(p, [a.key, b.key], [key]) }).unwrap()
+      } catch {
+        return
+      }
+      p.actions.selectStrand({ id: p.device.id, key })
+      p.actions.toast("success", `Combined ${a.name} and ${b.name}`)
+    },
+    onConfirmSeparate: (p) => async (key: string) => {
+      try {
+        await p.actions.setStrandGroups({ id: p.device.id, keys: groupsWithout(p, [key], []) }).unwrap()
+      } catch {
+        return
+      }
+      p.actions.selectStrand({ id: p.device.id, key: key.split("+")[0]! })
+      p.actions.toast("success", "Strands separated")
     },
   }),
 )(LightsTabView)

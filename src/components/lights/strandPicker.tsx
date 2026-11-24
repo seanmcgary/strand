@@ -1,6 +1,6 @@
 import type { LightsView } from "../../../shared/apiTypes"
 import { Button } from "@/components/ui/button"
-import { adjacentPairs, LOCKED, pinLabel } from "@/lights/model"
+import { adjacentPairs, COMBINE_BUTTON_ID, LOCKED, pinLabel } from "@/lights/model"
 import { cn } from "@/lib/utils"
 
 const CHIP =
@@ -38,7 +38,7 @@ export function StrandPicker({ view, selected, onPick, onCombine }: StrandPicker
           </span>
         </button>
       ))}
-      <Button type="button" variant="ghost" size="sm" leadingIcon="link" reason={reason} onClick={onCombine}>
+      <Button type="button" id={COMBINE_BUTTON_ID} variant="ghost" size="sm" leadingIcon="link" reason={reason} onClick={onCombine}>
         Combine…
       </Button>
     </div>

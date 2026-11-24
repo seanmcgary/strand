@@ -18,6 +18,10 @@ function renderTab(v: LightsView) {
     resolveShared: vi.fn(),
     loadLights: vi.fn(),
     toast: vi.fn(),
+    flashLed: vi.fn(),
+    setStrandGroups: vi.fn(() => ({ unwrap: () => Promise.resolve() })),
+    setStrandName: vi.fn(() => ({ unwrap: () => Promise.resolve() })),
+    loadOutputs: vi.fn(),
   }
   render(<LightsTab device={device} offline={false} lights={lights(v)} strand={v.strands[0] ?? null} prefs={prefs} actions={actions} />)
   return actions

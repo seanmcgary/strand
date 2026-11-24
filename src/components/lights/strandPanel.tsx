@@ -5,7 +5,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Icon } from "@/components/ui/icon"
 import { Slider } from "@/components/ui/slider"
 import { Switch } from "@/components/ui/switch"
-import { briToPct, freeSegs, LOCKED, needMsg, pinLabel } from "@/lights/model"
+import { briToPct, freeSegs, LOCKED, needMsg, pinLabel, strandMenuId } from "@/lights/model"
 import { cn } from "@/lib/utils"
 
 const CARD = "rounded-lg border bg-card text-card-foreground"
@@ -86,7 +86,7 @@ export function StrandPanel(props: StrandPanelProps) {
           </div>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button type="button" variant="ghost" size="icon-sm" aria-label={`${st.name} options`}>
+              <Button type="button" id={strandMenuId(st.key)} variant="ghost" size="icon-sm" aria-label={`${st.name} options`}>
                 <Icon name="ellipsis" />
               </Button>
             </DropdownMenuTrigger>
