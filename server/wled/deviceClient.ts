@@ -69,6 +69,10 @@ async function readBody(res: Response, name: string): Promise<string> {
 async function send<T>(deps: AppDeps, target: DeviceTarget, ip: string, path: string, init: DeviceRequestInit): Promise<T> {
   const { name } = target;
   const url = new URL(path, `http://${ip}:${target.port}`);
+  // `path` is one of the server's fixed paths. `//host` or `/\host` would make the URL name another host.
+  if (url.hostname !== ip || url.port !== (target.port === 80 ? "" : String(target.port))) {
+    throw new Error(`deviceRequest: path must stay on the device: ${path}`);
+  }
   const hasBody = init.body !== undefined;
   try {
     const res = await fetch(url, {
@@ -109,7 +113,7 @@ async function send<T>(deps: AppDeps, target: DeviceTarget, ip: string, path: st
  * sends the request there.
  *
  * `path` is one of the server's fixed device paths, so a path that does not
- * start with a single `/` is a programming error and throws a plain `Error`.
+ * start with `/`, or that names another host, is a programming error and throws a plain `Error`.
  */
 export async function deviceRequest<T>(
   deps: AppDeps,
@@ -117,8 +121,8 @@ export async function deviceRequest<T>(
   path: string,
   init: DeviceRequestInit = {},
 ): Promise<T> {
-  if (!path.startsWith("/") || path.startsWith("//")) {
-    throw new Error(`deviceRequest: path must start with a single "/": ${path}`);
+  if (!path.startsWith("/")) {
+    throw new Error(`deviceRequest: path must start with "/": ${path}`);
   }
   try {
     return await send<T>(deps, target, target.lastIp, path, init);

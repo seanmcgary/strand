@@ -65,7 +65,7 @@ export async function startFakeWled(seed: Seed, opts: FakeOpts = {}): Promise<Fa
 
   const info = (): Json => ({
     ...clone(seed.info),
-    name: (cfg.id as Json).name,
+    name: isObject(cfg.id) && typeof cfg.id.name === "string" ? cfg.id.name : seed.info.name,
     uptime: uptimeAtBoot + Math.floor((Date.now() - bootAt) / 1000),
     ...opts.infoOverride,
   });
@@ -82,17 +82,17 @@ export async function startFakeWled(seed: Seed, opts: FakeOpts = {}): Promise<Fa
 
   const modeFor = (request: FastifyRequest): FakeMode => {
     const pathname = request.url.split("?")[0];
-    const i = pending.findIndex(
+    const matches = pending.filter(
       (p) => (!p.method || p.method === request.method) && (!p.path || p.path === request.url || p.path === pathname),
     );
-    const match = pending[i];
-    if (!match) return mode;
-    if (match.skip > 0) {
-      match.skip -= 1;
-      return mode;
-    }
-    pending.splice(i, 1);
-    return match.mode;
+    // The first match with no skips left fires; every other match counts this request as one skip.
+    const fire = matches.find((p) => p.skip === 0);
+    matches.forEach((p) => {
+      if (p !== fire) p.skip -= 1;
+    });
+    if (!fire) return mode;
+    pending.splice(pending.indexOf(fire), 1);
+    return fire.mode;
   };
 
   const app = Fastify({ logger: false, forceCloseConnections: true });
@@ -102,8 +102,17 @@ export async function startFakeWled(seed: Seed, opts: FakeOpts = {}): Promise<Fa
     socket.on("close", () => sockets.delete(socket));
   });
 
+  // Recorded in onRequest so that unrouted paths are recorded too; the body is filled in once parsed.
+  const recorded = new WeakMap<FastifyRequest, FakeWled["requests"][number]>();
+  app.addHook("onRequest", async (request) => {
+    const entry = { method: request.method, path: request.url, body: undefined as unknown };
+    requests.push(entry);
+    recorded.set(request, entry);
+  });
+
   app.addHook("preHandler", async (request, reply) => {
-    requests.push({ method: request.method, path: request.url, body: request.body });
+    const entry = recorded.get(request);
+    if (entry) entry.body = request.body;
     switch (modeFor(request)) {
       case "ok":
         return;
@@ -187,7 +196,7 @@ export async function startFakeWled(seed: Seed, opts: FakeOpts = {}): Promise<Fa
       if (key === "pin") continue;
       if (key === "nw" && isObject(value)) cfg.nw = mergeNetwork(cfg.nw as Json, value);
       else if (key === "ap" && isObject(value)) cfg.ap = mergeAp(cfg.ap as Json, value);
-      else cfg[key] = clone(value);
+      else cfg[key] = deepMerge(cfg[key], value);
     }
     return { success: true };
   });
@@ -232,6 +241,14 @@ function applySegments(state: Json, value: unknown): void {
   state.seg = segs;
 }
 
+/** cfg.cpp keeps every key a write leaves out: objects merge at every depth, anything else (arrays too) replaces. */
+function deepMerge(current: unknown, next: unknown): unknown {
+  if (!isObject(current) || !isObject(next)) return clone(next);
+  const out: Json = { ...clone(current) };
+  for (const [key, value] of Object.entries(next)) out[key] = deepMerge(current[key], value);
+  return out;
+}
+
 /** Strips `psk` from a Wi-Fi entry and keeps its length, as the firmware does. */
 function withPskLength(entry: Json, psk: unknown, fallback: unknown): Json {
   const { psk: _psk, ...rest } = entry;
@@ -249,11 +266,12 @@ function mergeNetwork(current: Json, next: Json): Json {
     if (typeof ssid === "string" && ssid !== "") merged.ssid = ssid;
     ins[i] = withPskLength(merged, typeof psk === "string" && psk !== "" ? psk : undefined, prev.pskl);
   });
-  return { ...clone(next), ins };
+  const { ins: _ins, ...rest } = next;
+  return { ...(deepMerge(current, rest) as Json), ins };
 }
 
 // cfg.cpp: `ap.psk` is copied with no check, so "" makes the access point open.
 function mergeAp(current: Json, next: Json): Json {
-  const { pskl: _pskl, ...rest } = clone(next);
-  return withPskLength(rest, next.psk, current.pskl);
+  const { pskl: _pskl, psk, ...rest } = next;
+  return withPskLength(deepMerge(current, rest) as Json, psk, current.pskl);
 }

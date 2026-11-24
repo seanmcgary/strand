@@ -84,7 +84,7 @@ describe("deviceRequest", () => {
   });
 
   // Fails if a path without a leading slash, or one that names another host, is sent.
-  it.each(["json/state", "//example.com/json/state"])("rejects the path %s", async (path) => {
+  it.each(["json/state", "//example.com/json/state", "/\\example.com/json/state"])("rejects the path %s", async (path) => {
     const { fake, t, row } = await setup();
     const err = await deviceRequest(t.deps, row, path).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(Error);
