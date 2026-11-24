@@ -5,6 +5,7 @@ import { startFakeWled, type FakeWled } from "../../test/fakeWled";
 import { seeds } from "../../test/fixtures/seeds";
 import { makeTestApp } from "../../test/testApp";
 import * as devices from "../db/devices";
+import { CONFIG_KEYS } from "../wled/configMerge";
 
 const fakes: FakeWled[] = [];
 
@@ -350,8 +351,36 @@ describe("PATCH config", () => {
     expect(writes(f)).toHaveLength(0);
   });
 
-  // Fails if the body check accepts a key outside CONFIG_KEYS, a non-object, or any def key but on and bri.
+  // Fails if the body check closes an object that GET /config passes raw from the device, or refuses a value the device returns.
+  it.each(CONFIG_KEYS)("accepts the %s subtree of GET /config sent back unchanged", async (key) => {
+    const { t, f, url } = await setup();
+    // Keys a real device has in each subtree that WledConfig does not name.
+    type Cfg = typeof seeds.backyard.cfg;
+    const add = (pick: (c: Cfg) => unknown, extra: object) => Object.assign(pick(f.cfg as unknown as Cfg) as object, extra);
+    add((c) => c.id, { inv: "Light" });
+    add((c) => c.ap, { ip: [4, 3, 2, 1] });
+    add((c) => c.nw.ins[0], { bssid: "" });
+    add((c) => c.hw.led, { rgbwm: 255 });
+    add((c) => c.hw.led.ins[0], { freq: 0 });
+    add((c) => c.light, { gc: { bri: 1, col: 2.2, val: 2.2 } });
+    add((c) => c.if.sync, { port0: 21324 });
+    add((c) => c.if.sync.send, { ret: 0 });
+    const read = (await t.inject({ method: "GET", url: url("config") })).json<WledConfig>();
+    const res = await t.inject({ method: "PATCH", url: url("config"), payload: { [key]: read[key] } });
+    expect(res.statusCode).toBe(200);
+  });
+
+  // Fails if the body check accepts a key outside ConfigPatch, a wrong type for a named field, or a value past the device's range.
   it.each([
+    ["a string ap.chan", { ap: { chan: "x" } }],
+    ["an ap.chan above 13", { ap: { chan: 14 } }],
+    ["a numeric id.name", { id: { name: 5 } }],
+    ["an id.name over 32 characters", { id: { name: "x".repeat(33) } }],
+    ["a short ap.psk", { ap: { psk: "1234567" } }],
+    ["a non-array hw.led.ins", { hw: { led: { ins: "x" } } }],
+    ["an hw.led.ins entry without len", { hw: { led: { ins: [{ ...seeds.backyard.cfg.hw.led.ins[0]!, len: undefined }] } } }],
+    ["if.mqtt", { if: { mqtt: {} } }],
+    ["hw.relay", { hw: { relay: {} } }],
     ["an unlisted top-level key", { ota: { lock: false } }],
     ["an array", []],
     ["a non-object subtree", { hw: 5 }],

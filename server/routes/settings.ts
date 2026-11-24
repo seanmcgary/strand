@@ -1,8 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import type {
+  ApConfig,
   Capabilities,
   ConfigPatch,
+  LedOutput,
   PinInfo,
+  SyncConfig,
+  WifiEntry,
   WifiNetwork,
   WledConfig,
   WledConfigFull,
@@ -13,7 +17,7 @@ import * as devices from "../db/devices";
 import type { DeviceRow } from "../db/devices";
 import { ApiError, messages } from "../errors";
 import { parseCapabilities, pinsFromCapabilities } from "../wled/capabilities";
-import { classifyChanges, CONFIG_KEYS, checkUnsupported, mergeConfigPatch, topLevelBody } from "../wled/configMerge";
+import { classifyChanges, checkUnsupported, mergeConfigPatch, topLevelBody } from "../wled/configMerge";
 import { deviceRequest } from "../wled/deviceClient";
 import { lockCheck, targetOf } from "./devices";
 
@@ -109,26 +113,87 @@ async function readCapabilities(deps: AppDeps, row: DeviceRow): Promise<Capabili
   return caps;
 }
 
-const configBody = {
+type Schema = Record<string, unknown>;
+
+/**
+ * An object schema with one property per field of `T`, so the compiler flags a field the schema misses or adds.
+ * Open by default: `GET /config` passes raw device subtrees, so a body sent back carries device keys `T` does not name.
+ */
+const fields = <T>(properties: { [K in keyof T]-?: Schema }, extra: Schema = {}): Schema => ({
   type: "object",
-  minProperties: 1,
-  additionalProperties: false,
-  properties: Object.fromEntries(
-    CONFIG_KEYS.map((key) => [
-      key,
-      // Settings writes only `def.on` and `def.bri`; the boot preset belongs to Strand (plan decision 4).
-      key === "def"
-        ? {
-            type: "object",
-            additionalProperties: false,
-            properties: { on: { type: "boolean" }, bri: { type: "integer", minimum: 0, maximum: 255 } },
-          }
-        : key === "nw"
-          ? { type: "object", properties: { ins: { type: "array", items: { type: "object" } } } }
-          : { type: "object" },
-    ]),
-  ),
-} as const;
+  properties,
+  ...extra,
+});
+/** An array item: a whole entry, since a patch replaces an array whole (`DeepPartial`). */
+const entry = <T>(properties: { [K in keyof T]-?: Schema }, optional: (keyof T)[] = []): Schema =>
+  fields<T>(properties, { required: Object.keys(properties).filter((k) => !optional.includes(k as keyof T)) });
+const closed = { additionalProperties: false };
+
+const bool = { type: "boolean" };
+const int = { type: "integer" };
+const range = (minimum: number, maximum: number): Schema => ({ type: "integer", minimum, maximum });
+const text = (maxLength: number): Schema => ({ type: "string", maxLength });
+const list = (items: Schema, extra: Schema = {}): Schema => ({ type: "array", items, ...extra });
+// wifi-network.md:30-32: four 0-255 inputs per address.
+const address = list(range(0, 255), { minItems: 4, maxItems: 4 });
+
+const wifiEntry = entry<WifiEntry>(
+  {
+    ssid: text(32), // wifi-network.md:24
+    pskl: int,
+    psk: text(64), // wifi-network.md:28
+    ip: address,
+    gw: address,
+    sn: address,
+  },
+  ["psk"],
+);
+
+const apConfig = fields<ApConfig>({
+  ssid: text(32), // wifi-network.md:64
+  pskl: int,
+  // wifi-network.md:66: empty (open) or 8-63 characters; the device ignores 1-7.
+  psk: { type: "string", anyOf: [{ maxLength: 0 }, { minLength: 8, maxLength: 63 }] },
+  chan: range(1, 13), // wifi-network.md:67
+  hide: bool,
+  behav: range(0, 4), // wifi-network.md:68
+});
+
+const ledOutput = entry<LedOutput>({
+  type: int,
+  pin: list(int),
+  start: range(0, 8191), // led-hardware.md:123
+  len: int,
+  order: int,
+  rev: bool,
+  skip: range(0, 255), // led-hardware.md:127
+  ledma: range(0, 255), // led-hardware.md:132
+});
+
+// sync-interfaces.md:28-29: each group is a 0-255 bitmask.
+const syncConfig = fields<SyncConfig>({
+  recv: fields<SyncConfig["recv"]>({ bri: bool, col: bool, fx: bool, pal: bool, seg: bool, sb: bool, grp: range(0, 255) }),
+  send: fields<SyncConfig["send"]>({ en: bool, dir: bool, btn: bool, grp: range(0, 255) }),
+});
+
+/** `ConfigPatch`. `def`, `hw` and `if` are closed: `toWledConfig` returns only the keys named here for them. */
+const configBody = fields<WledConfig>(
+  {
+    id: fields<WledConfig["id"]>({ name: text(32), mdns: text(32) }), // ui.md:16, wifi-network.md:57
+    nw: fields<WledConfig["nw"]>({ ins: list(wifiEntry) }),
+    ap: apConfig,
+    // Settings writes only `def.on` and `def.bri`; the boot preset belongs to Strand (plan decision 4).
+    def: fields<WledConfig["def"]>({ on: bool, bri: range(0, 255) }, closed),
+    light: fields<WledConfig["light"]>({ "scale-bri": range(1, 255) }), // led-hardware.md:92
+    hw: fields<WledConfig["hw"]>(
+      // led-hardware.md:94, :105: 250-65000, or 0 with the limiter off.
+      { led: fields<WledConfig["hw"]["led"]>({ maxpwr: range(0, 65000), ins: list(ledOutput) }) },
+      closed,
+    ),
+    if: fields<WledConfig["if"]>({ sync: syncConfig }, closed),
+  },
+  { minProperties: 1, ...closed },
+);
 
 const unlockBody = {
   type: "object",
