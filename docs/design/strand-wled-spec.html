@@ -626,7 +626,6 @@ const LEASES = {
     POST   /api/devices/:id/lights/strands/:key/resolve
                               { action: "split"|"combine" } api.resolveShared(id, key, a)   → LightsView
     POST   /api/devices/:id/lights/flash { strandKey, led } api.flash(id, key, led)         → 204 (lit 3 s)
-    POST   /api/devices/:id/startup/consent { replace }     api.startupConsent(id, replace) → 204
     GET    /api/devices/:id/strand-groups                   api.getStrandGroups(id)         → string[]
     PUT    /api/devices/:id/strand-groups { keys }          api.putStrandGroups(id, keys)   → LightsView
     PUT    /api/devices/:id/strand-names { names }          api.putStrandNames(id, names)   → LightsView
@@ -654,10 +653,7 @@ const LEASES = {
                    normalize: the view differs from the device's segments (a segment made outside
                    Strand read as an All range, a left-out overlapping segment, or uncovered LEDs
                    read as an All range that is off). The strand's first write rewrites it whole.
-    LightsView = { on, bri, strands, segments: { used, max },
-                   startup: { enabled, otherBootPreset: { id, name } | null }, notices: string[] }
-                   startup.enabled && otherBootPreset → the boot-preset question hasn't been answered;
-                   after "Keep mine": enabled false; after "Replace": otherBootPreset null.
+    LightsView = { on, bri, strands, segments: { used, max }, notices: string[] }
     Scene      = { id, name, strandKey, ledCount, summary, createdAt, updatedAt }
     LookRecord = { id, name, look: { pattern, slots: SlotLook[] }, createdAt, updatedAt }
     Effect     = { id, name, pal: uses a palette, sliders: labels for sx/ix/c1, checks: labels for o1–o3,
@@ -1102,7 +1098,7 @@ function candyPaint(len) {
 function lightSeed(seed) {
   const one = (hex, fx = "Solid", opts) => ({ o0: { on: true, bri: 255, ranges: [mkRange("Range 1", 0, seed.config.hw.led.ins[0].len, ALL, [mkSlot(hex, fx, opts)])] } });
   switch (seed.mac) {
-    case "a4cf12345678": // Backyard: two strands, a segment made outside Strand, a boot preset of its own
+    case "a4cf12345678": // Backyard: two strands, a segment made outside Strand
       return {
         names: { o0: "Eaves" },
         strands: {
@@ -1123,7 +1119,6 @@ function lightSeed(seed) {
             ranges: [mkRange("Fence", 0, 120, ALL, [mkSlot("#0050FF", "Colorwaves", { pal: "Ocean" })]), mkRange("Porch light", 120, 30, ALL, [mkSlot("#FFFFFF")])],
           },
         },
-        bootPreset: { id: 5, name: "Evening" },
         scenes: [
           {
             id: "sc-party",
@@ -1185,8 +1180,6 @@ function lightsOf(s) {
       strands: clone(L.strands),
       shared: null,
       hidden: 0,
-      consent: null, // null: not asked; true: Replace; false: Keep mine
-      bootPreset: L.bootPreset ?? null,
       notices: [],
       scenes: clone(L.scenes ?? []),
       looks: clone(L.looks ?? []),
@@ -1258,14 +1251,12 @@ function lightsView(s) {
       ...(shared ? { shared: { with: L.shared.keys.filter((k) => k !== def.key) } } : {}),
     };
   });
-  const asked = L.bootPreset ? L.consent : true;
   return {
     on: s.state.on,
     bri: s.state.bri,
     strands,
     segments: { used: usedSegs(s), max: maxSegs(s) },
-    startup: { enabled: asked !== false, otherBootPreset: asked === null ? clone(L.bootPreset) : asked === false ? clone(L.bootPreset) : null },
-    notices: [...L.notices, ...(asked === false ? ["Your setup will reset when the controller restarts."] : [])],
+    notices: [...L.notices],
   };
 }
 /** Every lights write: reachable device, and the reviewer's "next lights change fails" switch. */
@@ -1410,11 +1401,6 @@ Object.assign(api, {
     defOf(s, strandKey);
     checkBudget(s, 1);
     void led;
-    return null;
-  },
-  async startupConsent(id, replace) {
-    await sleep(rand(150, 300));
-    lightsOf(online(id)).consent = !!replace;
     return null;
   },
   async getStrandGroups(id) {
@@ -1641,7 +1627,7 @@ Object.assign(prototype, {
     const s = sims.find((x) => x.id === id && registry.includes(x.seed.mac));
     if (!s) return null;
     const L = lightsOf(s);
-    return { hidden: L.hidden, uncombined: strandDefs(s).filter((d) => !d.key.includes("+")).length, shared: !!L.shared, consent: L.consent, bootPreset: !!L.bootPreset };
+    return { hidden: L.hidden, uncombined: strandDefs(s).filter((d) => !d.key.includes("+")).length, shared: !!L.shared };
   },
   /** A segment made outside Strand, read back as an All range that splits the range it lands in. */
   addForeignSegment(id, strandKey) {
@@ -1691,9 +1677,6 @@ Object.assign(prototype, {
     recut(s, strandDefs(s), outs.map((o) => ({ ...o, members: [o.key] })));
     L.groups = [];
     L.shared = { keys: outs.map((o) => o.key), slot: mkSlot("#FFA000") };
-  },
-  resetConsent(id) {
-    lightsOf(bySim(id)).consent = null;
   },
 });
 /* =============================================================================
@@ -2302,7 +2285,6 @@ document.addEventListener("submit", (e) => {
   if (el && A[el.dataset.submit]) A[el.dataset.submit](el, e);
 });
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && S.consent) return; // the boot-preset question needs an answer
   if (e.key === "Escape" && S.ui.menu) {
     S.focus = `${S.ui.menu}-btn`;
     S.ui.menu = null;
@@ -2547,7 +2529,7 @@ const WARN_MSG = "flex items-start gap-2 text-[13px] text-warning";
 function App() {
   const r = route();
   const page = r.name === "add" ? AddPage() : r.name === "device" ? DevicePage(r) : DevicesPage();
-  return page + Overlays() + ConsentDialog() + Toasts() + PrototypePanel();
+  return page + Overlays() + Toasts() + PrototypePanel();
 }
 
 // ---------------------------------------------------------------------------
@@ -4297,7 +4279,6 @@ S.ui.drag = null; // { id, key, i, led } while a range boundary is dragged
 S.ui.flash = null; // { id, key, led } while an LED flashes
 S.ui.brush = "#FF8800"; // Individual paint brush
 S.ui.cursor = {}; // paint keyboard cursor per range
-S.consent = null; // the boot-preset question, above any other dialog
 // Stand-ins for the preferences table (recentColors, favorites.effects).
 S.prefs = { recentColors: ["#FFB46B", "#FF0000", "#FFFFFF", "#0050FF", "#00C850"], favoriteEffects: ["Solid", "Twinkle"] };
 
@@ -4450,7 +4431,6 @@ async function pumpLights(id, w) {
       if (!w.next && !w.hold) {
         w.base = null;
         adoptView(id, w, view);
-        afterLightsWrite(id, view);
       }
     } catch (e) {
       if (w.base) adoptView(id, w, w.base);
@@ -4474,7 +4454,6 @@ async function lightsCall(id, fn) {
     const view = res?.view ?? res;
     if (view?.strands) {
       setCache(lightsKey(id), view);
-      afterLightsWrite(id, view);
     }
     return res ?? true;
   } catch (e) {
@@ -4482,14 +4461,6 @@ async function lightsCall(id, fn) {
     return null;
   } finally {
     render();
-  }
-}
-/** The first write on a device that boots another WLED preset asks once (design §6.7). */
-function afterLightsWrite(id, v) {
-  const p = v?.startup?.otherBootPreset;
-  if (v?.startup?.enabled && p && !S.consent) {
-    S.consent = { deviceId: id, name: deviceName(id), preset: p, busy: false };
-    S.focus = "consent-replace";
   }
 }
 function editStrand(id, key, fields, mutate) {
@@ -5824,7 +5795,6 @@ A.confirmApplyLook = async () => {
     setCache(lightsKey(m.deviceId), res.view);
     S.modal = null;
     toast("success", `Applied ${m.look.name}`, `Changed ${plural(targets.reduce((t, x) => t + (x.range ? 1 : strandOf(v, x.strandKey).ranges.length), 0), "range")}. ${res.warnings.join(" ")}`.trim());
-    afterLightsWrite(m.deviceId, res.view);
   } catch (e) {
     m.busy = false;
     m.error = e.message;
@@ -5891,7 +5861,6 @@ A.submitRename = async () => {
     if (m.kind === "strand") {
       const view = await api.putStrandNames(m.deviceId, { [m.key]: name });
       setCache(lightsKey(m.deviceId), view);
-      afterLightsWrite(m.deviceId, view);
     } else if (m.kind === "scene") {
       await api.renameScene(m.deviceId, m.pid, name);
       invalidate((k) => k === `${m.deviceId}:scenes`);
@@ -6080,43 +6049,6 @@ const LIGHTS_OVERLAYS = {
       size: "max-w-md",
       actions: `${cancelBtn()}<button type="button" class="${button({ variant: "destructive" })}" data-a="confirmDeletePreset"${m.busy ? " disabled" : ""}>${m.busy ? spinner() : ""}Delete</button>`,
     }),
-};
-
-/** The boot-preset question (design §6.7). Drawn above any other dialog; it has no close button. */
-function ConsentDialog() {
-  const c = S.consent;
-  if (!c) return "";
-  return Dialog({
-    title: "Replace the startup preset?",
-    description: `${esc(c.name)} starts with your WLED preset “${esc(c.preset.name)}” at boot. Strand needs to replace it to keep your strand setup after a restart.`,
-    close: false,
-    size: "max-w-md",
-    actions: `<button type="button" class="${button({ variant: "outline" })}" data-a="consent" data-v="0"${c.busy ? " disabled" : ""}>Keep mine</button><button type="button" id="consent-replace" class="${button()}" data-a="consent" data-v="1"${
-      c.busy ? " disabled" : ""
-    }>Replace</button>`,
-  });
-}
-A.consent = async (el) => {
-  const c = S.consent;
-  const replace = el.dataset.v === "1";
-  c.busy = true;
-  render();
-  try {
-    await api.startupConsent(c.deviceId, replace);
-    S.consent = null;
-    const v = viewOf(c.deviceId);
-    if (v) {
-      const next = deepClone(v);
-      next.startup = replace ? { enabled: true, otherBootPreset: null } : { enabled: false, otherBootPreset: c.preset };
-      if (!replace) next.notices = [...next.notices, "Your setup will reset when the controller restarts."];
-      setCache(lightsKey(c.deviceId), next);
-    }
-    if (replace) toast("success", "Strand will keep this setup after a restart");
-  } catch (e) {
-    c.busy = false;
-    toast("error", "Couldn't save your answer", e.message);
-  }
-  render();
 };
 
 // The Lights and Presets tabs read the device when they open (no polling while open).
@@ -6375,7 +6307,6 @@ A.closeModal = () => {
   render();
 };
 A.overlayClick = (el, e) => {
-  if (S.consent) return;
   if (e.target === el) A.closeModal();
 };
 A.leaveDiscard = () => {
@@ -6464,10 +6395,9 @@ function ProtoLights() {
     <div class="flex flex-wrap gap-2">
       ${btn("protoForeign", "plus", "Add a foreign segment", ok)}
       ${btn("protoShared", "layers", "One segment across strands", ok && li.uncombined > 1 && !li.shared)}
-      ${btn("protoAskBoot", "rotate-ccw", "Ask about boot preset again", ok && li.bootPreset && li.consent !== null)}
     </div>
     <div class="flex items-center justify-between gap-3 text-sm">Fill the segment budget${Switch({ checked: !!li?.hidden, action: "protoFill", label: "Fill the segment budget", disabled: !ok })}</div>
-    <p class="text-xs text-muted-foreground">Backyard boots its own WLED preset, so its first change asks about the startup preset. These re-read the Lights tab, as opening it would.</p>
+    <p class="text-xs text-muted-foreground">These re-read the Lights tab, as opening it would.</p>
   </section>`;
 }
 function protoLights(fn) {
@@ -6479,7 +6409,6 @@ function protoLights(fn) {
 A.protoForeign = () => protoLights((id) => prototype.addForeignSegment(id, selectedStrand(viewOf(id), id).key));
 A.protoShared = () => protoLights((id) => prototype.shareSegment(id));
 A.protoFill = (el) => protoLights((id) => prototype.fillBudget(id, flip(el)));
-A.protoAskBoot = () => protoLights((id) => prototype.resetConsent(id));
 A.protoClear = () => {
   prototype.clearDevices();
   navigate("/", { force: true });
@@ -6490,7 +6419,6 @@ A.protoReset = () => {
   S.form = null;
   S.reconnect = null;
   S.reboot = {};
-  S.consent = null;
   S.ui.strand = {};
   navigate("/", { force: true });
 };
