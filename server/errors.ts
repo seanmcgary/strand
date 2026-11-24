@@ -25,6 +25,8 @@ export const messages = {
   alreadyAdded: (name: string): string => `${name} is already in your devices.`,
   pinRequired: (): string => "This device's settings are protected by a PIN.",
   wrongPin: (): string => "That PIN didn't work.",
+  firmwareUnsupported: (name: string): string =>
+    `${name} runs a firmware version that this app does not support.`,
   invalidRequest: (): string => "That request isn't valid.",
 };
 

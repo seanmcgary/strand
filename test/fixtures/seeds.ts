@@ -7,7 +7,10 @@ import type { PinInfo, WifiNetwork, WledConfig, WledInfo } from "../../shared/ap
  * palette lists, `/json/pins` and the Wi-Fi scan.
  */
 
-export type SeedConfig = WledConfig & {
+/** The seed config keeps `def.ps`: the device has it, though `WledConfig` does not. */
+type DeviceConfig = WledConfig & { def: WledConfig["def"] & { ps: number } };
+
+export type SeedConfig = DeviceConfig & {
   hw: WledConfig["hw"] & { btn: Record<string, unknown>; ir: Record<string, unknown>; relay: Record<string, unknown> };
   if: WledConfig["if"] & { mqtt: Record<string, unknown>; ntp: Record<string, unknown> };
 };
@@ -119,7 +122,7 @@ type DesignSeed = {
   extraPins?: Record<number, string>;
   presets: { id: number; name: string }[];
   state: { on: boolean; bri: number };
-  config: WledConfig;
+  config: DeviceConfig;
 };
 
 // The design's `estimateCurrent`.

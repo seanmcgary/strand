@@ -106,7 +106,7 @@ export interface WledConfig {
   id: { name: string; mdns: string };
   nw: { ins: WifiEntry[] };
   ap: ApConfig;
-  def: { on: boolean; bri: number; ps: number };
+  def: { on: boolean; bri: number };
   light: { "scale-bri": number };
   hw: { led: { maxpwr: number; ins: LedOutput[] } };
   if: { sync: SyncConfig };
@@ -154,11 +154,6 @@ export interface WifiNetwork {
   rssi: number;
   channel: number;
   enc: number;
-}
-
-export interface Preset {
-  id: number;
-  name: string;
 }
 
 export interface Effect {
