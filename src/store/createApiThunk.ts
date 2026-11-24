@@ -1,41 +1,13 @@
 import { createAsyncThunk } from "@reduxjs/toolkit"
+import type { ErrorCode } from "../../shared/apiTypes"
 import { ApiError } from "@/api/client"
 
 /** Normalized error shape every rejected API thunk carries in `action.payload`. */
 export interface ThunkError {
   status?: number
-  code?: string | number
+  code?: ErrorCode
   message: string
 }
-
-/** Standard `{loading, error}` pair tracked per async operation in a slice. */
-export interface RequestState {
-  loading: boolean
-  error: ThunkError | null
-  /**
-   * When this operation last SUCCEEDED, as an epoch millisecond value, or
-   * `null`/absent when it has never succeeded in this store. Stamped from the
-   * fulfilled action's `meta.fetchedAt` (see `ApiThunkFulfilledMeta`) so a
-   * screen can state how old the data on it is.
-   *
-   * OPTIONAL ON PURPOSE. A required field would fail the type check in every
-   * consuming slice/test for no gain: a slice that does not track freshness
-   * simply leaves it absent.
-   */
-  fetchedAt?: number | null
-}
-
-export const initialRequestState: RequestState = { loading: false, error: null }
-
-/**
- * The initial state for a RequestState whose data is FETCHED ON MOUNT — starts
- * `loading: true` so a screen shows its loading state until the first fetch
- * resolves, instead of flashing an "empty"/"no data" state on the pre-fetch
- * render (before the thunk's `pending` fires in `componentDidMount`). Use this
- * for a slice's primary screen-data load field; keep `initialRequestState` for
- * user-action ops (create/update/delete/save) that legitimately start idle.
- */
-export const loadingRequestState: RequestState = { loading: true, error: null }
 
 /**
  * Normalizes whatever an API call throws into a `ThunkError`: an `ApiError`
@@ -65,10 +37,10 @@ export interface ApiThunkFulfilledMeta {
  * call succeeded. It is read HERE and not inside a reducer: a reducer must be
  * a pure function of its arguments, and `Date.now()` inside one breaks replay
  * and time-travel debugging. A slice that wants freshness copies the value
- * into its `RequestState.fetchedAt`; every other slice ignores it.
+ * into its own state; every other slice ignores it.
  */
 export function createApiThunk<Arg, Res>(typePrefix: string, call: (arg: Arg) => Promise<Res>) {
-  return createAsyncThunk<Res, Arg, { fulfilledMeta: ApiThunkFulfilledMeta }>(
+  return createAsyncThunk<Res, Arg, { fulfilledMeta: ApiThunkFulfilledMeta; rejectValue: ThunkError }>(
     typePrefix,
     async (arg, { fulfillWithValue, rejectWithValue }) => {
       try {
