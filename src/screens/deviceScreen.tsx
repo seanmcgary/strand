@@ -5,11 +5,12 @@ import type { KeyboardEvent } from "react"
 import { connect } from "react-redux"
 import { Link } from "react-router-dom"
 import { compose, lifecycle, withHandlers, withState } from "recompose"
-import type { Device } from "../../shared/apiTypes"
+import type { Device, StrandView } from "../../shared/apiTypes"
 import { AppHeader, GUTTER } from "@/components/appHeader"
 import { DeviceBanners } from "@/components/device/deviceBanners"
 import { DeviceHeader } from "@/components/device/deviceHeader"
 import { SettingsPanel } from "@/components/device/settingsPanel"
+import { LightsTab } from "@/components/lights/lightsTab"
 import { Button } from "@/components/ui/button"
 import { Icon } from "@/components/ui/icon"
 import type { IconName } from "@/components/ui/iconPaths"
@@ -30,9 +31,19 @@ import {
   type DevicePageEntry,
 } from "@/store/slices/devicePage"
 import { fetchDevices } from "@/store/slices/devices"
-import { loadFxLists, loadLights } from "@/store/slices/lights"
-import { loadPreferences } from "@/store/slices/preferences"
-import type { ToastItem } from "@/store/slices/toasts"
+import {
+  editStrand,
+  loadFxLists,
+  loadLights,
+  resolveShared,
+  selectLights,
+  selectRange,
+  selectStrand,
+  selectedStrand,
+  type DeviceLights,
+} from "@/store/slices/lights"
+import { loadPreferences, type PreferencesState } from "@/store/slices/preferences"
+import { toast, type ToastItem } from "@/store/slices/toasts"
 
 type Tab = "lights" | "presets" | "settings"
 
@@ -74,8 +85,9 @@ interface StateProps {
   devicesStatus: RootState["devices"]["status"]
   devicesError: ThunkError | null
   entry: DevicePageEntry
-  prefsLoaded: boolean
-  lightsLoaded: boolean
+  prefs: PreferencesState
+  lights: DeviceLights
+  strand: StrandView | null
   toasts: ToastItem[]
 }
 
@@ -90,8 +102,15 @@ const actions = {
   setPower,
   rebootNow,
   retryDevice,
+  editStrand,
+  selectStrand,
+  selectRange,
+  resolveShared,
+  toast,
 }
-type ActionProps = { [K in keyof typeof actions]: (...args: Parameters<(typeof actions)[K]>) => unknown }
+/** What dispatching each action returns: a thunk's own result, else the action. */
+type Dispatched<R> = R extends (...args: never[]) => infer T ? T : R
+type ActionProps = { [K in keyof typeof actions]: (...args: Parameters<(typeof actions)[K]>) => Dispatched<ReturnType<(typeof actions)[K]>> }
 
 interface LocalProps {
   /** The time "last seen" is measured from: when the device list last changed. */
@@ -131,9 +150,9 @@ function syncLoads(p: Props, prev: Props | null) {
   const lightsOpen = online && tabOf(p.location) === "lights"
   const wasOpen = wasOnline && !!prev && tabOf(prev.location) === "lights"
   if (lightsOpen && !wasOpen) {
-    p.loadLights(p.id, { quiet: p.lightsLoaded })
+    p.loadLights(p.id, { quiet: !!p.lights.view })
     p.loadFxLists(p.id)
-    if (!p.prefsLoaded) p.loadPreferences()
+    if (!p.prefs.loaded) p.loadPreferences()
   }
 }
 
@@ -209,6 +228,9 @@ export function DeviceScreenView(props: Props) {
         </div>
         {TABS.map((t) => (
           <div key={t.id} role="tabpanel" id={panelId(t.id)} aria-labelledby={tabId(t.id)} hidden={tab !== t.id} className="mt-5">
+            {tab === t.id && t.id === "lights" ? (
+              <LightsTab device={device} offline={!isOnline(props)} lights={props.lights} strand={props.strand} prefs={props.prefs} actions={props} />
+            ) : null}
             {tab === t.id && t.id === "settings" ? <SettingsPanel device={device} /> : null}
           </div>
         ))}
@@ -231,8 +253,9 @@ const mapState = (state: RootState, own: RouterProps): StateProps => {
     devicesStatus: state.devices.status,
     devicesError: state.devices.error,
     entry: selectDevicePage(state, id),
-    prefsLoaded: state.preferences.loaded,
-    lightsLoaded: !!state.lights.devices[id]?.view,
+    prefs: state.preferences,
+    lights: selectLights(state, id),
+    strand: selectedStrand(state, id),
     toasts: state.toasts.items,
   }
 }

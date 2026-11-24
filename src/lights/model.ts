@@ -194,6 +194,9 @@ export function mergeInto(fxs: Effect[] | null, pals: Palette[] | null, rs: Rang
   return rs.with(keep, a).filter((_, k) => k !== drop)
 }
 
+/** The DOM id of the strip handle between range `i` and `i + 1` of strand `key`, for moving focus to it. */
+export const handleId = (key: string, i: number): string => `h-${key}-${i}`
+
 /**
  * Moves the boundary between range `i` and `i + 1` to `led`, snapped to a whole LED and kept where both
  * ranges still fit their pattern. Null when nothing changes.
