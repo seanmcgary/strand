@@ -1,16 +1,20 @@
 import type { FastifyInstance } from "fastify";
-import type { ApplyResult, Scene } from "../../shared/apiTypes";
+import type { ApplyResult, LookRecord, LookTarget, Scene } from "../../shared/apiTypes";
 import type { ServerDeps } from "../app";
+import * as looks from "../db/looks";
 import * as scenes from "../db/scenes";
 import { ApiError, messages } from "../errors";
-import { clearLeftovers, deviceError, readDeviceLights, writeLayout } from "../lights/deviceLights";
-import { LayoutError, writeStrand } from "../lights/layoutWrite";
-import { sceneToPatch, snapshotStrand } from "../lights/snapshots";
+import { clearLeftovers, deviceError, readDeviceLights, writeLayout, type DeviceLights } from "../lights/deviceLights";
+import { LayoutError, segmentsNeeded, writeStrand } from "../lights/layoutWrite";
+import { lookFromRange, lookToPatches, sceneToPatch, snapshotStrand } from "../lights/snapshots";
 import { loadDevice } from "./settings";
 
 const NAME_CHARS = 64;
 const MAX_SCENES = 256;
+const MAX_LOOKS = 256;
 const MAX_CONTENT_BYTES = 65536;
+const MAX_TARGETS = 64;
+const STRAND_KEY = "^o\\d+(\\+o\\d+)*$";
 
 const nameProp = { type: "string", maxLength: 1024 } as const;
 const saveBody = {
@@ -24,6 +28,31 @@ const renameBody = {
   required: ["name"],
   additionalProperties: false,
   properties: { name: nameProp },
+} as const;
+
+const lookBody = {
+  type: "object",
+  required: ["name", "strandKey", "range"],
+  additionalProperties: false,
+  properties: { name: nameProp, strandKey: { type: "string", pattern: STRAND_KEY }, range: { type: "string", maxLength: 64 } },
+} as const;
+const applyLookBody = {
+  type: "object",
+  required: ["targets"],
+  additionalProperties: false,
+  properties: {
+    targets: {
+      type: "array",
+      minItems: 1,
+      maxItems: MAX_TARGETS,
+      items: {
+        type: "object",
+        required: ["strandKey"],
+        additionalProperties: false,
+        properties: { strandKey: { type: "string", pattern: STRAND_KEY }, range: { type: "string", maxLength: 64 } },
+      },
+    },
+  },
 } as const;
 
 /** The trimmed name, or `422 invalid_name`. */
@@ -47,6 +76,10 @@ export function toScene(row: scenes.SceneRow): Scene {
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
+}
+
+export function toLookRecord(row: looks.LookRow): LookRecord {
+  return { id: row.id, name: row.name, look: row.look, createdAt: row.createdAt, updatedAt: row.updatedAt };
 }
 
 export async function presetsRoutes(app: FastifyInstance, deps: ServerDeps): Promise<void> {
@@ -110,6 +143,86 @@ export async function presetsRoutes(app: FastifyInstance, deps: ServerDeps): Pro
       } catch (err) {
         throw err instanceof LayoutError ? deviceError(err, strand.name) : err;
       }
+    },
+  );
+
+  const lookOf = (deviceId: string, id: string): looks.LookRow => {
+    const row = looks.get(deps.db, deviceId, id);
+    if (!row) throw new ApiError(404, "not_found", messages.lookGone());
+    return row;
+  };
+
+  app.get<{ Params: { id: string } }>("/api/devices/:id/looks", async (request): Promise<LookRecord[]> =>
+    looks.list(deps.db, loadDevice(deps, request.params.id).id).map(toLookRecord),
+  );
+
+  app.post<{ Params: { id: string }; Body: { name: string; strandKey: string; range: string } }>(
+    "/api/devices/:id/looks",
+    { schema: { body: lookBody } },
+    async (request, reply): Promise<LookRecord> => {
+      const row = loadDevice(deps, request.params.id);
+      const name = checkedName(request.body.name);
+      if (looks.count(deps.db, row.id) >= MAX_LOOKS) throw new ApiError(422, "too_many", messages.tooManyLooks());
+      const view = (await readDeviceLights(deps, row)).view.strands.find((s) => s.key === request.body.strandKey);
+      if (!view) throw new ApiError(409, "strand_changed", messages.strandChanged());
+      const range = view.ranges.find((r) => r.name === request.body.range);
+      if (!range) throw new ApiError(404, "not_found", messages.rangeGone());
+      try {
+        const saved = looks.insert(deps.db, { deviceId: row.id, name, look: lookFromRange(range) }, deps.now());
+        return reply.code(201).send(toLookRecord(saved));
+      } catch (err) {
+        throw err instanceof LayoutError ? deviceError(err, view.name) : err;
+      }
+    },
+  );
+
+  app.patch<{ Params: { id: string; lookId: string }; Body: { name: string } }>(
+    "/api/devices/:id/looks/:lookId",
+    { schema: { body: renameBody } },
+    async (request): Promise<LookRecord> => {
+      const row = loadDevice(deps, request.params.id);
+      const name = checkedName(request.body.name);
+      const renamed = looks.rename(deps.db, row.id, request.params.lookId, name, deps.now());
+      if (!renamed) throw new ApiError(404, "not_found", messages.lookGone());
+      return toLookRecord(renamed);
+    },
+  );
+
+  app.delete<{ Params: { id: string; lookId: string } }>("/api/devices/:id/looks/:lookId", async (request, reply) => {
+    looks.remove(deps.db, loadDevice(deps, request.params.id).id, request.params.lookId);
+    return reply.code(204).send();
+  });
+
+  app.post<{ Params: { id: string; lookId: string }; Body: { targets: LookTarget[] } }>(
+    "/api/devices/:id/looks/:lookId/apply",
+    { schema: { body: applyLookBody } },
+    async (request): Promise<ApplyResult> => {
+      const row = loadDevice(deps, request.params.id);
+      const { look } = lookOf(row.id, request.params.lookId);
+      let d: DeviceLights = await clearLeftovers(deps, await readDeviceLights(deps, row));
+      const targets = request.body.targets.map((t) => {
+        const strand = d.view.strands.find((s) => s.key === t.strandKey);
+        if (!strand) throw new ApiError(409, "strand_changed", messages.strandChanged());
+        if (strand.shared) throw new ApiError(409, "shared", messages.shared(strand.name));
+        if (t.range !== undefined && !strand.ranges.some((r) => r.name === t.range)) throw new ApiError(404, "not_found", messages.rangeGone());
+        return { strand, range: t.range };
+      });
+      const { patches, warnings } = lookToPatches(look, targets, d.lists);
+      let name = targets[0]!.strand.name;
+      try {
+        const need = patches.reduce((sum, p) => sum + segmentsNeeded(d.state, d.strands.find((s) => s.key === p.key)!, p.next, d.lists, d.paint), 0);
+        const free = d.view.segments.max - d.state.seg.length;
+        if (need > free) throw new LayoutError("segment_budget", messages.segmentBudget(need, free), { need, free });
+        // One strand at a time, each against the device as the last write left it.
+        for (const { key, next } of patches) {
+          const strand = d.strands.find((s) => s.key === key)!;
+          name = strand.name;
+          d = await writeLayout(deps, d, writeStrand(d.state, strand, next, d.lists, d.paint, d.view.segments.max));
+        }
+      } catch (err) {
+        throw err instanceof LayoutError ? deviceError(err, name) : err;
+      }
+      return { view: d.view, warnings };
     },
   );
 }
