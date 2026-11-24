@@ -1,11 +1,14 @@
-import { DatabaseSync } from "node:sqlite";
+import fs from "node:fs";
+import path from "node:path";
 import { buildApp } from "./app";
 import { loadConfig } from "./config";
+import { openDb } from "./db/database";
 
 const config = loadConfig(process.env);
+fs.mkdirSync(config.dataDir, { recursive: true });
 const app = buildApp({
   config,
-  db: new DatabaseSync(":memory:"),
+  db: openDb(path.join(config.dataDir, "strand.db")),
   mdns: { browseWled: async () => [], resolveA: async () => null },
   now: () => new Date(),
   wledPort: 80,
