@@ -23,6 +23,8 @@ pnpm build:server        # server → dist-server/server.js
 pnpm start               # node dist-server/server.js
 pnpm dev:build           # with `pnpm dev` in a second terminal: rebuild and restart on change
 pnpm storybook
+docker build -t strand .
+docker compose up   # network_mode: host; data in ./data
 ```
 
 ## Stack

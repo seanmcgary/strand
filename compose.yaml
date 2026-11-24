@@ -1,0 +1,11 @@
+services:
+  app:
+    build: .
+    image: strand
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./data:/data
+    # environment:
+    #   # Required when serving behind a reverse proxy with its own host name (comma-separated).
+    #   ALLOWED_HOSTS: strand.example.com
