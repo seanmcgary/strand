@@ -3,6 +3,7 @@ import Fastify, { type FastifyInstance, type FastifyServerOptions } from "fastif
 import fastifyStatic from "@fastify/static";
 import type { Config } from "./config";
 import { ApiError, registerErrorHandler } from "./errors";
+import { devicesRoutes } from "./routes/devices";
 import { isApiRequest, registerRequestGuard } from "./requestGuard";
 import { serializeRequestForLog } from "./requestLogSerializer";
 
@@ -40,6 +41,9 @@ export function buildApp(deps: AppDeps): FastifyInstance {
         ? false
         : { ...(typeof deps.logger === "object" ? deps.logger : {}), serializers: { req: serializeRequestForLog } },
     bodyLimit: 32768,
+    // Fastify's default Ajv coerces types and strips unknown properties, so a
+    // schema alone would accept `{ host: 5 }` and `{ host, extra }`.
+    ajv: { customOptions: { coerceTypes: false, removeAdditional: false } },
   });
 
   // `/api` takes JSON bodies only.
@@ -50,6 +54,8 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   });
   registerRequestGuard(app, config);
   registerErrorHandler(app);
+
+  app.register(devicesRoutes, deps);
 
   app.register(fastifyStatic, {
     root: config.webDistDir,
