@@ -1,4 +1,5 @@
 import { configureStore, type ReducersMapObject } from "@reduxjs/toolkit"
+import { devicePageSlice } from "./slices/devicePage"
 import { devicesSlice } from "./slices/devices"
 import { lightsSlice } from "./slices/lights"
 import { preferencesSlice } from "./slices/preferences"
@@ -14,6 +15,7 @@ export function makeStore<S>(reducers: ReducersMapObject<S>) {
 
 /** The slices the app runs with, one per domain. */
 export const reducers = {
+  devicePage: devicePageSlice.reducer,
   devices: devicesSlice.reducer,
   lights: lightsSlice.reducer,
   preferences: preferencesSlice.reducer,

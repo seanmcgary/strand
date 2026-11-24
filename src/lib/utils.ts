@@ -21,3 +21,12 @@ export const FOCUS_RING =
  */
 export const FOCUS_RING_WITHIN =
   "has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-brand/40 has-[:focus-visible]:ring-offset-2 has-[:focus-visible]:ring-offset-white"
+
+/** "just now", "5 min ago", "3 h ago" or "2 d ago" (the design's `relativeTime`, with no-break spaces). */
+export function relativeTime(iso: string, now: number): string {
+  const diff = Math.max(0, now - new Date(iso).getTime()) / 1e3
+  if (diff < 45) return "just now"
+  if (diff < 3600) return `${Math.max(1, Math.round(diff / 60))}\u00A0min\u00A0ago`
+  if (diff < 86400) return `${Math.round(diff / 3600)}\u00A0h\u00A0ago`
+  return `${Math.round(diff / 86400)}\u00A0d\u00A0ago`
+}
