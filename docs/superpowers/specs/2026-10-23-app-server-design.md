@@ -10,16 +10,17 @@ better-wled ("Strand for WLED") replaces the web UI that ships on WLED controlle
 The server is thin. It does four things:
 
 1. It serves the built frontend.
-2. It keeps a list of saved devices in SQLite.
+2. It keeps the saved devices, scenes and looks in SQLite.
 3. It finds WLED devices on the local network.
 4. It sends each browser request to the correct device and returns the result.
 
-The server keeps no device state in memory between requests. It does not hold connections to devices. It does not queue requests. Every API request is complete in itself.
+The server keeps no state that must survive a restart. It may hold short timers in memory: the 3-second LED flash and the 5-second startup-preset write (Lights and Presets design §6.6, §6.7). A restart loses at most one pending startup write. It does not hold connections to devices. It does not queue requests. Apart from those timers, every API request is complete in itself.
 
 ## 2. Sources of truth
 
 - `docs/design/strand-wled-spec.html` is the source of truth for the UI and for the API contract. Its "MOCK APP SERVER" block (the `api` object and its comment) lists every endpoint, the response shapes, and the error codes. Open the file in a browser to use the prototype.
 - This document says how the real server implements that contract with the WLED JSON API. Where this document and the design differ, section 12 lists each difference and the reason.
+- The Lights and Presets design (`docs/superpowers/specs/2026-11-23-lights-presets-design.md`) designs the Lights and Presets tabs. It changes some rules of this document: sections 3, 4, 7, 8.3 and 8.4 show the changes.
 - `docs/wled-ui-audit/` describes the WLED device API.
 - `docs/design/claude-design-prompt-settings.md` is the prompt that produced the design. It is history, not a source of truth.
 
@@ -28,8 +29,9 @@ The server keeps no device state in memory between requests. It does not hold co
 - The server is the Fastify serving tier of the template frontend in `~/Code/app-template/frontend`. There is no Go service and no separate backend process.
 - Take only the frontend from the template. Remove the template parts that this app does not use (section 5).
 - The browser renders all pages. There is no server-side rendering.
-- The server is stateless in memory. There is no per-device client object, no request queue, and no connection pool that the server manages.
-- There is no WebSocket, between the server and a device or between the browser and the server. The browser polls the server with plain HTTP requests. This replaces the WebSocket in PRD §22 on purpose: polling shows changes that other clients (for example, Home Assistant) make.
+- The server keeps no state that must survive a restart. It may hold short in-memory timers (section 1). There is no per-device client object, no request queue, and no connection pool that the server manages.
+- There is no WebSocket, between the server and a device or between the browser and the server. This replaces the WebSocket in PRD §22 on purpose. The browser does not poll lighting state. Changes that other clients (for example, Home Assistant) make are not tracked (Lights and Presets design, decision 12).
+- The browser never builds or sends WLED JSON. The Lights API speaks the strand model, and the server alone translates it to WLED segments (Lights and Presets design §9).
 - SQLite stores the device list.
 - The server writes settings only through the WLED JSON API. It does not use the settings form POSTs (`/settings/<page>`). It reads `/settings/s.js?p=N` only where the JSON API has no equivalent (section 8.3).
 - The server supports WLED 0.15 and later.
@@ -56,8 +58,8 @@ The server keeps no device state in memory between requests. It does not hold co
 
 The work fails, even if it runs, if any of these is true:
 
-- The server holds device state, a connection, or a queue in memory between requests.
-- The server stores lighting state, effects, palettes, segments, or presets in the database.
+- The server holds a connection, a queue, or state that must survive a restart, in memory. The flash and startup-write timers (section 1) are the only exceptions.
+- The server stores live lighting state, effects, palettes, or segments in the database. Saved scenes and looks, and strand combinations, are in the database (section 7).
 - The server adds keys to a state write that change what the device does. The one added key is `"v": true`, which only makes the device return its full state (section 8.4). The server never adds `time` or `transition` (`docs/wled-ui-audit/main-ui/data-flow.md`).
 - A config write sends a partial subtree to the device and so resets fields that the user did not change (`docs/wled-ui-audit/settings/mechanism.md`).
 - The server sends data to a third party (analytics, telemetry).
@@ -142,6 +144,8 @@ CREATE TABLE preferences (
 - `name`, `last_ip`, and `last_seen` change when the server gets a good `/json/info` reply from the device. Any endpoint that reads `/json/info` makes this update.
 - `pending_reboot` and `pending_since` are described in section 8.3.
 - The `preferences` table holds UI preferences, for example effect favorites. Effect favorites use effect names, not effect IDs, because IDs change between WLED builds (`docs/wled-ui-audit/README.md`).
+- Strand names are preferences (`strandNames.<deviceId>`). The server writes them through `PUT /api/devices/:id/strand-names`, so it can use them in segment names.
+- A later migration adds the tables `scenes`, `looks` and `strand_groups` (Lights and Presets design §8). Scenes and looks are Strand's presets.
 
 ## 8. API
 
@@ -217,15 +221,14 @@ Each endpoint below loads the device by `:id`. If there is no such device, it re
 | `GET /api/devices/:id/capabilities` | `GET /settings/s.js?p=2` | `Capabilities` |
 | `GET /api/devices/:id/pins` | `GET /json/pins` | `{ pins: PinInfo[] }` |
 | `POST /api/devices/:id/networks/scan` | `GET /json/net`, repeated | `{ networks: WifiNetwork[] }` |
-| `GET /api/devices/:id/presets` | `GET /presets.json` | `{ id, name }[]` |
 | `POST /api/devices/:id/reboot` | `POST /json/state` `{"rb":true}` | `204` |
 | `GET /api/devices/:id/pending-reboot` | `GET /json/info` when a change is pending | `string[]` |
 
 **Info.** Return the fields of `WledInfo` from `/json/info`. Include `wifi.ssid` when the device reports it.
 
-**Config read.** Return the subtrees that `WledConfig` names: `id`, `nw`, `ap`, `def`, `light`, `hw.led`, and `if.sync`. The device never returns a password. It returns `pskl`, the password length.
+**Config read.** Return the subtrees that `WledConfig` names: `id`, `nw`, `ap`, `def` (only `on` and `bri`), `light`, `hw.led`, and `if.sync`. The device never returns a password. It returns `pskl`, the password length.
 
-**Config write.** The body is a partial `WledConfig` that changes one section. The server does these steps:
+**Config write.** The body is a partial `WledConfig` that changes one section. A `def` object may hold only `on` and `bri`. Any other `def` key gets `400 invalid_request`. The boot preset (`def.ps`) belongs to Strand's startup preset (Lights and Presets design §6.7), so Settings has no boot preset field. The server does these steps:
 
 1. Read the current `/json/cfg`.
 2. Check the body against the limits of the JSON API. Return `422 unsupported_change` if either is true:
@@ -250,22 +253,22 @@ Each endpoint below loads the device by `:id`. If there is no such device, it re
 
 **Network scan.** The first `/json/net` request starts a scan and returns an empty list. Request it again once a second, at most 10 times, until the list has entries (`docs/wled-ui-audit/settings/wifi-network.md`). If the list is still empty, return the empty list.
 
-**Presets.** Drop preset 0 and entries that have no `n`. Sort by `id`.
+**Presets.** There is no WLED presets endpoint. WLED presets are not a user feature (Lights and Presets design §3).
 
 **Reboot.** Return `204` when the device accepts the request. The device then goes offline for about 10 seconds. The design polls `/info` until the device answers.
 
 ### 8.4 Control
 
-The design leaves light control for a later round. The PRD needs these endpoints, so the server includes them now.
+These endpoints serve the page header switch, the dashboard card, and the effect and palette lists. All other lighting changes use the Lights API and the scene and look endpoints (Lights and Presets design §9).
 
 | Method and path | Device requests | Result |
 |---|---|---|
 | `GET /api/devices/:id/state` | `GET /json/state` | the WLED state object, unchanged |
-| `PATCH /api/devices/:id/state` | `POST /json/state` with the body plus `"v": true` | the WLED state object |
+| `PATCH /api/devices/:id/state` `{ on?, bri? }` | `POST /json/state` with the body plus `"v": true` | the WLED state object |
 | `GET /api/devices/:id/effects` | `GET /json/effects` and `GET /json/fxdata` | `{ id, name, meta }[]` |
 | `GET /api/devices/:id/palettes` | `GET /json/palettes` | `{ id, name }[]` |
 
-- **State write.** The server checks that the body is a JSON object. It rejects a body that has `pin` or `rb`, because unlock and reboot have their own endpoints. It adds `"v": true`, so that the device returns its full state, which the design caches. It makes no other change. Segment edits, preset run, save, rename and delete (`ps`, `psave`, `pdel`), and the LED flash for segment edges (`seg.i`) all go through this endpoint. The frontend is responsible for correct WLED payloads (`docs/wled-ui-audit/api/json-state.md`).
+- **State write.** The body is `{ on?, bri? }`: `on` is a boolean, and `bri` is an integer from 0 to 255. The body must have at least one of them. The server rejects any other key, and any other body, with `400 invalid_request`. It adds `"v": true`, so that the device returns its full state, which the design caches. It makes no other change. Segments, slots, paint, the LED flash, scenes and looks do not use this endpoint. They use the Lights API and the scene and look endpoints (Lights and Presets design §9).
 - **Effects.** Join the two lists by index. Drop the entries named `RSVD`. `meta` is the `fxdata` string for that effect.
 
 ### 8.5 Preferences
@@ -303,7 +306,7 @@ This is how the app finds a device after a Wi-Fi change gives it a new address. 
 | Any other non-2xx | `502 device_error` |
 | A body that is not JSON where the server expects JSON | `502 device_error` |
 
-A device accepts about 6 requests at the same time. More requests get a `503` (`docs/wled-ui-audit/api/limits-and-gotchas.md`). The server does not prevent this. The browser treats `device_busy` as a temporary error and tries again at its next poll.
+A device accepts about 6 requests at the same time. More requests get a `503` (`docs/wled-ui-audit/api/limits-and-gotchas.md`). The server does not prevent this. The browser treats `device_busy` as a temporary error, and the user can try again.
 
 ## 10. Docker
 
@@ -321,7 +324,7 @@ A device accepts about 6 requests at the same time. More requests get a `503` (`
   - A reconnect change causes a reboot request.
   - A hostname change sets `pending_reboot`, and a later restart of the device clears it.
   - A shorter `nw.ins` list and an empty client `psk` return `422 unsupported_change`.
-- The state-write test proves that the server adds only `"v": true`.
+- The state-write test proves that the server adds only `"v": true`, and rejects every key other than `on` and `bri`.
 - Fixtures and `s.js?p=2` samples cover WLED 0.15, 0.16 and 17.0.0-dev.
 - Each SQLite test uses its own temporary database.
 
@@ -341,7 +344,7 @@ My calls (decisions I made, not the owner):
 2. `bonjour-service` for the mDNS browse and the A-record lookup. It is pure JavaScript.
 3. No UDP 65506 listener.
 4. No automatic lock after a config write.
-5. The state write adds `"v": true` and rejects `pin` and `rb`.
+5. The state write adds `"v": true` and accepts only `on` and `bri`.
 6. Only root-path hosting behind a reverse proxy. All browser URLs use absolute paths (`/api/...`) and no origin.
 7. The repository root holds one package, named `strand`. There is no workspace.
 8. The `preferences` endpoints and their limits.

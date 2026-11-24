@@ -241,6 +241,8 @@ All Lights           >
 
 Changes should feel immediate.
 
+The Lights tab replaces this screen and the Segments screen. Power and brightness are per device and per strand. Color, effect and palette are per slot of a range. See `docs/superpowers/specs/2026-11-23-lights-presets-design.md` §7.2.
+
 ---
 
 # 10. Effects
@@ -307,6 +309,8 @@ Users should be able to:
 
 Avoid requiring users to manually type indexes whenever possible.
 
+Strand shows segments as strands, ranges and patterns. A strand is one LED output. The user splits a strand into ranges, and gives each range a pattern (All, Every N, or Individual). Strand writes the WLED segments. The user never sees a segment index. See `docs/superpowers/specs/2026-11-23-lights-presets-design.md` §2 and §6.
+
 ---
 
 # 13. Visual Segment Designer
@@ -369,32 +373,37 @@ A more sophisticated physical-layout designer can come later.
 
 # 15. Presets
 
-Support native WLED presets.
+Presets are Strand scenes and looks. Strand stores them in its database, per controller.
+
+- **Scene:** a saved configuration for one strand: its ranges, patterns, slots, paint, power and brightness.
+- **Look:** a pattern with its slots (colors, effects, palettes). It has no LED positions, so it fits any strand.
 
 Required:
 
-- list presets
-- run preset
-- create preset from current state
-- rename preset
-- delete preset
+- list scenes and looks
+- apply a scene to its strand
+- apply a look to one or more strands or ranges
+- save a scene from a strand, or a look from a range
+- rename a scene or a look
+- delete a scene or a look
 
 Example:
 
 ```text
-Presets
+Scenes                         [ + Save scene… ]
+Roofline: Party
+Holiday
 
-Warm White
-Halloween
-Christmas
-Game Day
-
-[ + Save Current State ]
+Looks                          [ + Save look… ]
+Candy cane
+Warm white
 ```
 
-Do not create a separate application-level scene system in MVP.
+WLED presets are not a user feature. Strand does not list them. They stay on the device, and the stock UI still runs them.
 
-Use WLED's existing preset functionality.
+Strand keeps one reserved WLED preset on each controller: ID 250, "Strand: startup". It holds the layout, so the layout survives a reboot. Strand always sets it as the boot preset. It does not ask.
+
+See `docs/superpowers/specs/2026-11-23-lights-presets-design.md` §2, §6.7 and §7.5.
 
 ---
 
@@ -536,23 +545,13 @@ This provides an escape hatch while keeping MVP scope reasonable.
 
 Use the WLED JSON API for runtime control.
 
-The server should maintain a WebSocket connection where practical so state changes made elsewhere are reflected in the UI.
+There is no WebSocket and no polling of lighting state.
 
-Example:
+The browser reads the lights when a screen opens. After that, it shows the result of its own writes.
 
-```text
-Home Assistant changes brightness
-           ↓
-         WLED
-           ↓
-      WebSocket
-           ↓
-        Server
-           ↓
-        Browser
-```
+Changes made outside Strand (for example, by Home Assistant) are not tracked.
 
-No complicated state synchronization system is required beyond this.
+The browser never sends WLED JSON. It sends the strand model, and the server translates it to WLED segments.
 
 ---
 
@@ -575,8 +574,9 @@ PATCH  /api/devices/:id/config
 
 GET    /api/devices/:id/effects
 GET    /api/devices/:id/palettes
-GET    /api/devices/:id/presets
 ```
+
+`PATCH /api/devices/:id/state` accepts only `{ on?, bri? }`. The Lights, scene and look endpoints are in `docs/superpowers/specs/2026-11-23-lights-presets-design.md` §9.
 
 Frontend code should not talk directly to WLED.
 
@@ -607,7 +607,15 @@ preferences
 
 for UI preferences.
 
-Most lighting state remains on WLED itself.
+For presets and strands:
+
+```text
+scenes
+looks
+strand_groups
+```
+
+Live lighting state remains on WLED itself.
 
 ---
 
@@ -658,6 +666,8 @@ Settings
 Add Device
 ```
 
+Device Control and Segments are one tab, Lights. The device page has three tabs: Lights, Presets, Settings.
+
 That's it.
 
 Do not build a giant navigation system.
@@ -691,7 +701,7 @@ Dashboard
    ↓
 Backyard
    ↓
-Color / Effect / Segment / Preset
+Lights / Presets
 ```
 
 ## Configuration
@@ -723,8 +733,8 @@ The MVP is ready when a user can:
 11. Create/edit/delete segments.
 12. Adjust segment ranges visually.
 13. Flash segment boundaries for identification.
-14. Run native WLED presets.
-15. Save the current state as a preset.
+14. Apply a saved scene or look.
+15. Save a strand as a scene, or a range as a look.
 16. Edit basic LED hardware configuration.
 17. Edit basic network configuration.
 18. Edit basic sync configuration.
@@ -741,7 +751,6 @@ Do not accidentally start building these while working on MVP:
 
 ```text
 Physical house designer
-Arbitrary per-pixel painting
 Cross-device scenes
 Custom palette designer
 Playlist designer
@@ -757,6 +766,8 @@ Static/browser-only mode
 ```
 
 They are future features.
+
+Per-LED paint (the Individual pattern) is in v1. See `docs/superpowers/specs/2026-11-23-lights-presets-design.md` §2.
 
 ---
 
