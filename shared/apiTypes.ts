@@ -156,6 +156,12 @@ export interface WifiNetwork {
   enc: number;
 }
 
+/** The body of `PATCH /api/devices/:id/state`: the only live-state write the browser sends. */
+export interface StatePatch {
+  on?: boolean;
+  bri?: number;
+}
+
 export interface Effect {
   id: number;
   name: string;

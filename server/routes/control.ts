@@ -1,0 +1,47 @@
+import type { FastifyInstance } from "fastify";
+import type { Effect, Palette, StatePatch } from "../../shared/apiTypes";
+import type { AppDeps } from "../app";
+import { deviceRequest } from "../wled/deviceClient";
+import { targetOf } from "./devices";
+import { loadDevice } from "./settings";
+
+const statePatchBody = {
+  type: "object",
+  minProperties: 1,
+  additionalProperties: false,
+  properties: { on: { type: "boolean" }, bri: { type: "integer", minimum: 0, maximum: 255 } },
+} as const;
+
+/** The name WLED gives to an effect slot that no effect uses. */
+const RESERVED_EFFECT = "RSVD";
+
+export async function controlRoutes(app: FastifyInstance, deps: AppDeps): Promise<void> {
+  app.get<{ Params: { id: string } }>("/api/devices/:id/state", async (request) =>
+    deviceRequest<Record<string, unknown>>(deps, targetOf(loadDevice(deps, request.params.id)), "/json/state"),
+  );
+
+  app.patch<{ Params: { id: string }; Body: StatePatch }>(
+    "/api/devices/:id/state",
+    { schema: { body: statePatchBody } },
+    async (request) =>
+      // `v` makes the device answer with its full state.
+      deviceRequest<Record<string, unknown>>(deps, targetOf(loadDevice(deps, request.params.id)), "/json/state", {
+        method: "POST",
+        body: { ...request.body, v: true },
+      }),
+  );
+
+  app.get<{ Params: { id: string } }>("/api/devices/:id/effects", async (request): Promise<Effect[]> => {
+    const target = targetOf(loadDevice(deps, request.params.id));
+    const names = await deviceRequest<string[]>(deps, target, "/json/effects");
+    const fxdata = await deviceRequest<string[]>(deps, target, "/json/fxdata");
+    return names
+    .map((name, id) => ({ id, name, meta: fxdata[id] ?? "" }))
+    .filter((effect) => effect.name !== RESERVED_EFFECT);
+  });
+
+  app.get<{ Params: { id: string } }>("/api/devices/:id/palettes", async (request): Promise<Palette[]> => {
+    const names = await deviceRequest<string[]>(deps, targetOf(loadDevice(deps, request.params.id)), "/json/palettes");
+    return names.map((name, id) => ({ id, name }));
+  });
+}
