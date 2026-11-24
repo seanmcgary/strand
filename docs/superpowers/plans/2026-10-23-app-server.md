@@ -561,7 +561,7 @@ review: no
   - `PUT /api/preferences/fav { value: ["Chase"] }` → 204, then `GET` → `{ fav: ["Chase"] }`. Key `"a b"` → 400. A value over 64 KB → 400. A 257th new key → 400. A `PUT` on an existing key when there are 256 keys → 204.
 - [ ] **Step 2: Run.** Expected: FAIL.
 - [ ] **Step 3: Implement** by spec §8.4 and §8.5. `PUT /api/preferences/:key` uses `bodyLimit: 71680`.
-  - Check the `PATCH state` body in the handler: a plain object with at least one key, each key `on` or `bri`, `on` a boolean, `bri` an integer from 0 to 255. Otherwise, `400 invalid_request`. A Fastify body schema alone is not enough: Fastify's default Ajv options (`removeAdditional`, `coerceTypes`) drop unknown keys and convert `"false"` to `false` instead of rejecting them.
+  - Check the `PATCH state` body in the handler: a plain object with at least one key, each key `on` or `bri`, `on` a boolean, `bri` an integer from 0 to 255. Otherwise, `400 invalid_request`. `buildApp` sets the Ajv options `coerceTypes: false` and `removeAdditional: false` (Task 6), so a body schema rejects unknown keys and wrong types. The handler check stays for the rules a schema does not state (at least one key).
 - [ ] **Step 4: Gate.** `pnpm exec tsc --noEmit && pnpm lint && pnpm test server/routes/control.test.ts server/routes/preferences.test.ts`. Expected: PASS.
 - [ ] **Step 5: Commit.** `feat(server): add light control and preferences endpoints`
 

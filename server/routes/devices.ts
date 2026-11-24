@@ -80,8 +80,17 @@ export async function lockCheck(deps: AppDeps, target: DeviceTarget, recover = t
 /** The IPv4 address of a name: `.local` names through mDNS, other names through the system resolver. */
 async function resolveName(deps: AppDeps, name: string): Promise<string | null> {
   if (name.endsWith(".local")) return deps.mdns.resolveA(name, RESOLVE_TIMEOUT_MS).catch(() => null);
-  const timeout = new Promise<null>((resolve) => setTimeout(resolve, deps.config.deviceTimeoutMs, null));
-  return Promise.race([lookup(name, { family: 4 }).then((r) => r.address), timeout]).catch(() => null);
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(resolve, deps.config.deviceTimeoutMs, null);
+  });
+  try {
+    return await Promise.race([lookup(name, { family: 4 }).then((r) => r.address), timeout]);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Finds the WLED device at what the user typed. Throws `400 invalid_request` or `404 no_device`. */
@@ -93,14 +102,15 @@ async function probeHost(
   if (!parsed) throw new ApiError(400, "invalid_request", messages.invalidRequest());
   const { port } = parsed;
 
-  const isIp = IPV4.test(parsed.host);
   // A bare name with no dot tries `<name>.local` first.
-  const names = isIp ? [] : parsed.host.includes(".") ? [parsed.host] : [`${parsed.host}.local`, parsed.host];
-  for (const name of isIp ? [parsed.host] : names) {
-    const ip = isIp ? name : await resolveName(deps, name);
+  const candidates = IPV4.test(parsed.host)
+    ? [{ host: parsed.host, ip: parsed.host }]
+    : (parsed.host.includes(".") ? [parsed.host] : [`${parsed.host}.local`, parsed.host]).map((host) => ({ host }));
+  for (const candidate of candidates) {
+    const ip = "ip" in candidate ? candidate.ip : await resolveName(deps, candidate.host);
     if (!ip) continue;
     const info = await fetchInfo(deps, ip, port);
-    if (info) return { host: name, port, ip, info };
+    if (info) return { host: candidate.host, port, ip, info };
   }
   throw new ApiError(404, "no_device", messages.noDevice(input.trim()));
 }
@@ -125,15 +135,17 @@ export async function devicesRoutes(app: FastifyInstance, deps: AppDeps): Promis
     const now = deps.now();
     return Promise.all(
       rows.map(async (row): Promise<Device> => {
-        const target = targetOf(row);
-        // Recovery is off so that one moved device does not slow the list.
-        const info = await deviceRequest<WledInfo>(deps, target, "/json/info", { recover: false }).catch(() => null);
-        if (info?.mac !== row.mac) return toDevice(row, { online: false, locked: false }, now);
-
-        const name = typeof info.name === "string" && info.name !== "" ? info.name.slice(0, 64) : row.name;
-        devices.recordSeen(deps.db, row.id, { name, lastIp: row.lastIp }, now);
-        const locked = await lockCheck(deps, target, false).catch(() => false);
-        return toDevice({ ...row, name }, { online: true, locked }, now);
+        const offline = toDevice(row, { online: false, locked: false }, now);
+        try {
+          // Recovery is off so that one moved device does not slow the list.
+          const info = await fetchInfo(deps, row.lastIp, row.port);
+          if (info?.mac !== row.mac) return offline;
+          devices.recordSeen(deps.db, row.id, { name: info.name || row.name, lastIp: row.lastIp }, now);
+          const locked = await lockCheck(deps, targetOf(row), false).catch(() => false);
+          return toDevice({ ...row, name: info.name || row.name }, { online: true, locked }, now);
+        } catch {
+          return offline;
+        }
       }),
     );
   });

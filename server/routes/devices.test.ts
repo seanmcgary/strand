@@ -1,10 +1,13 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { lookup } from "node:dns/promises";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Device, DiscoveredDevice } from "../../shared/apiTypes";
 import { startFakeWled, type FakeWled } from "../../test/fakeWled";
 import { seeds } from "../../test/fixtures/seeds";
 import { makeTestApp } from "../../test/testApp";
 import * as devices from "../db/devices";
 import { normalizeHost } from "./devices";
+
+vi.mock("node:dns/promises", () => ({ lookup: vi.fn() }));
 
 const fakes: FakeWled[] = [];
 
@@ -44,6 +47,16 @@ describe("GET /api/devices", () => {
     expect(list[2]).toMatchObject({ online: false, pinLocked: false, lastSeen: "2026-11-20T08:00:00.000Z" });
   });
 
+  // Fails if a device answering as a different MAC is shown online or has its saved name overwritten.
+  it("reports a device offline when another device answers at its address", async () => {
+    const t = makeTestApp();
+    const other = await fake(seeds.garage);
+    t.addFake(other, seeds.backyard);
+    const res = await t.inject({ method: "GET", url: "/api/devices" });
+    expect(res.json<Device[]>()[0]).toMatchObject({ name: "Backyard", online: false });
+    expect(devices.list(t.db)[0]!.name).toBe("Backyard");
+  });
+
   // Fails if the list asks devices one after another, or waits on an offline device longer than one timeout.
   it("answers within about one timeout when a device does not reply", async () => {
     const { t } = await listSetup();
@@ -68,6 +81,7 @@ describe("normalizeHost", () => {
     ["HTTP://192.168.1.42/", { host: "192.168.1.42", port: 80 }],
     ["192.168.1.42:8080", { host: "192.168.1.42", port: 8080 }],
     ["Wled-Backyard", { host: "wled-backyard", port: 80 }],
+    ["https://192.168.1.42", { host: "192.168.1.42", port: 80 }],
     ["wled-backyard.local", { host: "wled-backyard.local", port: 80 }],
   ])("accepts %s", (input, expected) => {
     expect(normalizeHost(input, 80)).toEqual(expected);
@@ -127,6 +141,16 @@ describe("POST /api/devices/probe", () => {
     expect(res.json()).toMatchObject({ alreadyAdded: true });
   });
 
+  // Fails if a name that is not .local stops going through the system resolver.
+  it("resolves a name that is not .local through DNS", async () => {
+    vi.mocked(lookup).mockResolvedValue({ address: "127.0.0.1", family: 4 } as never);
+    const f = await fake(seeds.backyard);
+    const t = makeTestApp({ wledPort: f.port });
+    const res = await t.inject({ method: "POST", url: "/api/devices/probe", payload: { host: "wled.example.com" } });
+    expect(lookup).toHaveBeenCalledWith("wled.example.com", { family: 4 });
+    expect(res.json()).toMatchObject({ host: "wled.example.com", ip: "127.0.0.1" });
+  });
+
   // Fails if a closed port stops giving 404 no_device with the typed host in the message.
   it("returns no_device when nothing answers", async () => {
     const t = makeTestApp();
@@ -173,6 +197,17 @@ describe("POST /api/devices", () => {
     const again = await t.inject({ method: "POST", url: "/api/devices", payload });
     expect(again.statusCode).toBe(409);
     expect(again.json()).toEqual({ error: "already_added", message: "Backyard is already in your devices." });
+  });
+});
+
+describe("POST /api/devices with a PIN", () => {
+  // Fails if add stops running the lock check.
+  it("returns pinLocked for a locked device", async () => {
+    const t = makeTestApp();
+    const f = await fake(seeds.frontRoof, { pin: "1234" });
+    const res = await t.inject({ method: "POST", url: "/api/devices", payload: { host: `127.0.0.1:${f.port}` } });
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({ pinLocked: true });
   });
 });
 
