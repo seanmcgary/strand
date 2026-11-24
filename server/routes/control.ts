@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { Effect, Palette, StatePatch } from "../../shared/apiTypes";
 import type { AppDeps } from "../app";
+import { ApiError, messages } from "../errors";
 import { deviceRequest } from "../wled/deviceClient";
 import { targetOf } from "./devices";
 import { loadDevice } from "./settings";
@@ -35,13 +36,20 @@ export async function controlRoutes(app: FastifyInstance, deps: AppDeps): Promis
     const target = targetOf(loadDevice(deps, request.params.id));
     const names = await deviceRequest<string[]>(deps, target, "/json/effects");
     const fxdata = await deviceRequest<string[]>(deps, target, "/json/fxdata");
+    if (!Array.isArray(names) || !Array.isArray(fxdata)) {
+      throw new ApiError(502, "device_error", messages.deviceError(target.name, "the reply is not valid"));
+    }
     return names
     .map((name, id) => ({ id, name, meta: fxdata[id] ?? "" }))
     .filter((effect) => effect.name !== RESERVED_EFFECT);
   });
 
   app.get<{ Params: { id: string } }>("/api/devices/:id/palettes", async (request): Promise<Palette[]> => {
-    const names = await deviceRequest<string[]>(deps, targetOf(loadDevice(deps, request.params.id)), "/json/palettes");
+    const target = targetOf(loadDevice(deps, request.params.id));
+    const names = await deviceRequest<string[]>(deps, target, "/json/palettes");
+    if (!Array.isArray(names)) {
+      throw new ApiError(502, "device_error", messages.deviceError(target.name, "the reply is not valid"));
+    }
     return names.map((name, id) => ({ id, name }));
   });
 }

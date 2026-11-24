@@ -82,4 +82,12 @@ describe("GET effects and palettes", () => {
     const res = await t.inject({ method: "GET", url: url("palettes") });
     expect(res.json<Palette[]>()).toEqual(seeds.backyard.palettes.map((name, id) => ({ id, name })));
   });
+
+  // Fails if a non-array effects reply is not mapped to 502 device_error.
+  it("answers 502 device_error when the device's effects reply is not a list", async () => {
+    const { t, url } = await setup({ ...seeds.backyard, effects: {} as unknown as string[] });
+    const res = await t.inject({ method: "GET", url: url("effects") });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({ error: "device_error" });
+  });
 });
