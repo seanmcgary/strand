@@ -620,13 +620,11 @@ const LEASES = {
     PATCH  /api/devices/:id/lights          { on?, bri? }   api.patchLights(id, body)       → LightsView
     PATCH  /api/devices/:id/lights/strands/:key
                               { on?, bri?, ranges? }        api.patchStrand(id, key, body)  → LightsView
-           `ranges` is the strand's full RangeView[] (custom ranges excluded); the server sends
-           only what changed. 422 segment_budget when it needs more segments than are free.
+           `ranges` is the strand's full RangeView[]; the server sends only what changed, or
+           rewrites the whole strand when it is marked `normalize`. 422 segment_budget when it
+           needs more segments than are free.
     POST   /api/devices/:id/lights/strands/:key/resolve
                               { action: "split"|"combine" } api.resolveShared(id, key, a)   → LightsView
-    PATCH  /api/devices/:id/lights/custom/:ref { slot?, on? } api.patchCustom(id, ref, body) → LightsView
-    POST   /api/devices/:id/lights/custom/:ref/convert      api.convertCustom(id, ref)      → LightsView
-           409 layout_changed (+ new view) when `ref` is stale.
     POST   /api/devices/:id/lights/flash { strandKey, led } api.flash(id, key, led)         → 204 (lit 3 s)
     POST   /api/devices/:id/startup/consent { replace }     api.startupConsent(id, replace) → 204
     GET    /api/devices/:id/strand-groups                   api.getStrandGroups(id)         → string[]
@@ -651,9 +649,11 @@ const LEASES = {
     SlotView   = SlotLook & { on }
     Pattern    = { kind: "all" } | { kind: "every", n, group } | { kind: "individual" }
     RangeView  = { name, start, len, pattern, slots: SlotView[], paint?: string[] }   (start: LED in strand)
-    CustomRangeView = { ref, name, start, len, slot: SlotView }   (`ref` is opaque)
-    StrandView = { key: "o0" | "o0+o1", name, pins, start, len, on, bri, ranges, custom,
+    StrandView = { key: "o0" | "o0+o1", name, pins, start, len, on, bri, ranges, normalize,
                    shared?: { with: string[] } }                  (one segment spans uncombined strands)
+                   normalize: the view differs from the device's segments (a segment made outside
+                   Strand read as an All range, a left-out overlapping segment, or uncovered LEDs
+                   read as an All range that is off). The strand's first write rewrites it whole.
     LightsView = { on, bri, strands, segments: { used, max },
                    startup: { enabled, otherBootPreset: { id, name } | null }, notices: string[] }
                    startup.enabled && otherBootPreset → the boot-preset question hasn't been answered;
@@ -1078,8 +1078,9 @@ const PALETTES = [
 /* =============================================================================
    MOCK APP SERVER: LIGHTS AND PRESETS
    One strand model per device: strands from hw.led.ins (+ saved combinations),
-   their ranges, patterns, slots and paint, Custom ranges (segments made outside
-   Strand), and the device's scenes and looks. The real server derives all of
+   their ranges, patterns, slots and paint (a segment made outside Strand is
+   already an All range, with `normalize` on its strand), and the device's
+   scenes and looks. The real server derives all of
    this from the device's WLED segments; the mock does not simulate segments.
    ============================================================================= */
 const ALL = { kind: "all" };
@@ -1101,7 +1102,7 @@ function candyPaint(len) {
 function lightSeed(seed) {
   const one = (hex, fx = "Solid", opts) => ({ o0: { on: true, bri: 255, ranges: [mkRange("Range 1", 0, seed.config.hw.led.ins[0].len, ALL, [mkSlot(hex, fx, opts)])] } });
   switch (seed.mac) {
-    case "a4cf12345678": // Backyard: two strands, a Custom range, a boot preset of its own
+    case "a4cf12345678": // Backyard: two strands, a segment made outside Strand, a boot preset of its own
       return {
         names: { o0: "Eaves" },
         strands: {
@@ -1114,9 +1115,14 @@ function lightSeed(seed) {
               mkRange("Rest", 120, 30, ALL, [mkSlot("#FFB46B", "Breathe")]),
             ],
           },
-          o1: { on: true, bri: 200, ranges: [mkRange("Fence", 0, 120, ALL, [mkSlot("#0050FF", "Colorwaves", { pal: "Ocean" })])] },
+          // Porch light was made in the WLED app: it reads as an All range, so the strand is marked normalize.
+          o1: {
+            on: true,
+            bri: 200,
+            normalize: true,
+            ranges: [mkRange("Fence", 0, 120, ALL, [mkSlot("#0050FF", "Colorwaves", { pal: "Ocean" })]), mkRange("Porch light", 120, 30, ALL, [mkSlot("#FFFFFF")])],
+          },
         },
-        custom: [{ seg: 5, name: "Porch light", start: 270, len: 30, slot: mkSlot("#FFFFFF") }],
         bootPreset: { id: 5, name: "Evening" },
         scenes: [
           {
@@ -1177,13 +1183,11 @@ function lightsOf(s) {
       names: L.names ?? {},
       groups: [],
       strands: clone(L.strands),
-      custom: clone(L.custom ?? []),
       shared: null,
       hidden: 0,
       consent: null, // null: not asked; true: Replace; false: Keep mine
       bootPreset: L.bootPreset ?? null,
       notices: [],
-      nextSeg: 10,
       scenes: clone(L.scenes ?? []),
       looks: clone(L.looks ?? []),
     };
@@ -1233,10 +1237,7 @@ function usedSegs(s) {
   const L = lightsOf(s);
   const defs = strandDefs(s);
   const own = defs.filter((d) => !L.shared?.keys.includes(d.key)).reduce((t, d) => t + segsOf(strandModel(s, d).ranges), 0);
-  return own + (L.shared ? 1 : 0) + L.custom.length + L.hidden;
-}
-function customRef(c) {
-  return `c${c.seg}-${c.start}-${c.len}`;
+  return own + (L.shared ? 1 : 0) + L.hidden;
 }
 function lightsView(s) {
   const L = lightsOf(s);
@@ -1253,9 +1254,7 @@ function lightsView(s) {
       on: m.on,
       bri: m.bri,
       ranges: shared ? [mkRange("Range 1", 0, def.len, ALL, [clone(L.shared.slot)])] : clone(m.ranges),
-      custom: L.custom
-      .filter((c) => c.start >= def.start && c.start < def.start + def.len)
-      .map((c) => ({ ref: customRef(c), name: c.name, start: c.start - def.start, len: c.len, slot: clone(c.slot) })),
+      normalize: !shared && !!m.normalize,
       ...(shared ? { shared: { with: L.shared.keys.filter((k) => k !== def.key) } } : {}),
     };
   });
@@ -1287,7 +1286,7 @@ function defOf(s, key) {
 function checkBudget(s, extra) {
   const free = maxSegs(s) - usedSegs(s);
   if (extra > free) {
-    throw new ApiError(422, "segment_budget", `This needs ${plural(extra, "more segment")} and ${free} ${free === 1 ? "is" : "are"} free. Remove a range or a custom range first.`);
+    throw new ApiError(422, "segment_budget", `This needs ${plural(extra, "more segment")} and ${free} ${free === 1 ? "is" : "are"} free. Remove a range first.`);
   }
 }
 function validRanges(def, ranges) {
@@ -1375,6 +1374,7 @@ Object.assign(api, {
     const m = strandModel(s, def);
     if (body.on !== undefined) m.on = !!body.on;
     if (body.bri !== undefined) m.bri = Math.max(0, Math.min(255, body.bri));
+    delete m.normalize; // the first write rewrites the whole strand from the view
     if (body.ranges) {
       if (L.shared?.keys.includes(key)) {
         L.shared.slot = clone(body.ranges[0].slots[0]);
@@ -1402,34 +1402,6 @@ Object.assign(api, {
       defs.forEach((d) => (L.strands[d.key] = { on: true, bri: 255, ranges: [mkRange("Range 1", 0, d.len, ALL, [clone(slot)])] }));
     }
     L.shared = null;
-    return lightsView(s);
-  },
-  async patchCustom(id, ref, body) {
-    await sleep(rand(150, 350));
-    const s = lightsWrite(id);
-    const c = lightsOf(s).custom.find((x) => customRef(x) === ref);
-    if (!c) throw new ApiError(409, "layout_changed", "That range changed on the device. Strand reloaded it.");
-    if (body.slot) c.slot = { ...clone(body.slot), on: c.slot.on };
-    if (body.on !== undefined) c.slot.on = !!body.on;
-    return lightsView(s);
-  },
-  async convertCustom(id, ref) {
-    await latency();
-    const s = lightsWrite(id);
-    const L = lightsOf(s);
-    const c = L.custom.find((x) => customRef(x) === ref);
-    if (!c) throw new ApiError(409, "layout_changed", "That range changed on the device. Strand reloaded it.");
-    const def = strandDefs(s).find((d) => c.start >= d.start && c.start < d.start + d.len);
-    const m = strandModel(s, def);
-    const start = c.start - def.start;
-    if (m.ranges.some((r) => r.start < start + c.len && r.start + r.len > start)) {
-      throw new ApiError(409, "overlaps", "It overlaps another range, so it can't become one.");
-    }
-    const taken = new Set(m.ranges.map((r) => r.name));
-    let n = m.ranges.length + 1;
-    while (!c.name && taken.has(`Range ${n}`)) n++;
-    m.ranges = [...m.ranges, mkRange(c.name || `Range ${n}`, start, Math.min(c.len, def.len - start), ALL, [clone(c.slot)])].sort((a, b) => a.start - b.start);
-    L.custom = L.custom.filter((x) => x !== c);
     return lightsView(s);
   },
   async flash(id, strandKey, led) {
@@ -1545,7 +1517,7 @@ Object.assign(api, {
     const n = checkName(name);
     if (L.looks.length >= 256) throw new ApiError(422, "too_many", "A device can keep 256 looks.");
     const r = strandModel(s, defOf(s, strandKey)).ranges.find((x) => x.name === range);
-    if (!r) throw new ApiError(409, "layout_changed", "That range changed. Pick it again.");
+    if (!r) throw new ApiError(404, "not_found", "That range isn't on the strand any more. Pick it again.");
     if (r.pattern.kind === "individual") throw new ApiError(422, "painted", "A range with painted LEDs can't be saved as a look.");
     const now = new Date().toISOString();
     const rec = { id: uuid(), name: n, look: { pattern: clone(r.pattern), slots: r.slots.map(({ on: _on, ...x }) => clone(x)) }, createdAt: now, updatedAt: now };
@@ -1585,7 +1557,7 @@ Object.assign(api, {
     }
     const extra = Object.entries(next).reduce((t, [k, rs]) => t + segsOf(rs) - segsOf(L.strands[k].ranges), 0);
     checkBudget(s, extra);
-    Object.entries(next).forEach(([k, rs]) => (L.strands[k].ranges = rs));
+    Object.entries(next).forEach(([k, rs]) => (L.strands[k] = { ...L.strands[k], ranges: rs, normalize: false }));
     return { view: lightsView(s), warnings: [] };
   },
 });
@@ -1671,13 +1643,40 @@ Object.assign(prototype, {
     const L = lightsOf(s);
     return { hidden: L.hidden, uncombined: strandDefs(s).filter((d) => !d.key.includes("+")).length, shared: !!L.shared, consent: L.consent, bootPreset: !!L.bootPreset };
   },
+  /** A segment made outside Strand, read back as an All range that splits the range it lands in. */
   addForeignSegment(id, strandKey) {
     const s = bySim(id);
-    const L = lightsOf(s);
     const def = strandDefs(s).find((d) => d.key === strandKey) ?? strandDefs(s)[0];
+    const m = strandModel(s, def);
     const len = Math.max(1, Math.min(10, Math.floor(def.len / 5)));
-    const start = def.start + Math.floor((def.len - len) / 2);
-    L.custom.push({ seg: L.nextSeg++, name: "", start, len, slot: mkSlot("#00FFFF", "Scan") });
+    const start = Math.floor((def.len - len) / 2);
+    const end = start + len;
+    const names = new Set(m.ranges.map((r) => r.name));
+    const fresh = () => {
+      let n = 2;
+      while (names.has(`Range ${n}`)) n++;
+      names.add(`Range ${n}`);
+      return `Range ${n}`;
+    };
+    const piece = (r, a, b, name) => {
+      const out = mkRange(name, a, b - a, clone(r.pattern), clone(r.slots));
+      if (r.paint) out.paint = r.paint.slice(a - r.start, b - r.start);
+      return out;
+    };
+    const ranges = [];
+    for (const r of m.ranges) {
+      const rEnd = r.start + r.len;
+      if (rEnd <= start || r.start >= end) {
+        ranges.push(r);
+        continue;
+      }
+      if (r.start < start) ranges.push(piece(r, r.start, start, r.name));
+      if (rEnd > end) ranges.push(piece(r, end, rEnd, r.start < start ? null : r.name));
+    }
+    ranges.push(mkRange(fresh(), start, len, ALL, [mkSlot("#00FFFF", "Scan")]));
+    ranges.forEach((r) => (r.name ??= fresh()));
+    m.ranges = ranges.sort((a, b) => a.start - b.start);
+    m.normalize = true;
   },
   fillBudget(id, on) {
     const s = bySim(id);
@@ -4328,7 +4327,7 @@ const listText = (xs) => (xs.length > 2 ? `${xs.slice(0, -1).join(", ")} and ${x
 const reasonAttr = (reason) => (reason ? ` aria-disabled="true" title="${esc(reason)}"` : "");
 const dsel = (el) => ({ id: el.dataset.id, key: el.dataset.key, i: Number(el.dataset.i) });
 const needMsg = (need, free) =>
-  `This needs ${plural(need, "more segment")} and ${free} ${free === 1 ? "is" : "are"} free. Remove a range or a custom range first.`;
+  `This needs ${plural(need, "more segment")} and ${free} ${free === 1 ? "is" : "are"} free. Remove a range first.`;
 
 function patternText(p) {
   if (p.kind === "every") return `Every ${p.n} · group ${p.group}`;
@@ -4364,7 +4363,7 @@ function slotText(id, slot) {
   if (m && m.colors.length === 0) return `${slot.fxName} · ${slot.palName}`;
   return `${colorName(hexOf(slot.col[0]))} · ${slot.fxName}${usesPalette(id, slot) ? ` · ${slot.palName}` : ""}`;
 }
-/** One color per LED of a strand: ranges by pattern, then Custom ranges on top. */
+/** One color per LED of a strand, by each range's pattern. */
 function ledColors(id, st) {
   const out = Array(st.len).fill("#000000");
   for (const r of st.ranges) {
@@ -4374,12 +4373,9 @@ function ledColors(id, st) {
       out[r.start + k] = r.pattern.kind === "individual" ? r.paint?.[k] ?? "#000000" : slotColorAt(id, r.slots[Math.floor(k / g) % n], k / r.len);
     }
   }
-  for (const c of st.custom) {
-    for (let k = 0; k < c.len && c.start + k < st.len; k++) out[c.start + k] = slotColorAt(id, c.slot, k / c.len);
-  }
   return out;
 }
-const rangeColors = (id, r) => ledColors(id, { len: r.len, ranges: [{ ...r, start: 0 }], custom: [] });
+const rangeColors = (id, r) => ledColors(id, { len: r.len, ranges: [{ ...r, start: 0 }] });
 function nextRangeName(ranges) {
   let n = 2;
   while (ranges.some((r) => r.name === `Range ${n}`)) n++;
@@ -4468,10 +4464,10 @@ async function pumpLights(id, w) {
   render();
 }
 function lightsError(id, e) {
-  if (e?.code === "layout_changed" || e?.code === "strand_changed") invalidate((k) => k === lightsKey(id));
+  if (e?.code === "strand_changed") invalidate((k) => k === lightsKey(id));
   toast("error", "Couldn't change the lights", e?.message ?? "");
 }
-/** A write that waits for the server (layout answers, combine, convert, scenes, looks). */
+/** A write that waits for the server (layout answers, combine, scenes, looks). */
 async function lightsCall(id, fn) {
   try {
     const res = await fn();
@@ -4529,34 +4525,6 @@ function editRanges(id, key, fn) {
     view.segments.used += need;
   });
   return true;
-}
-function findCustom(v, ref) {
-  for (const st of v?.strands ?? []) {
-    const c = st.custom.find((x) => x.ref === ref);
-    if (c) return c;
-  }
-  return null;
-}
-function editCustom(id, ref, field, mutate) {
-  const chan = `custom:${ref}`;
-  const w = writer(id, chan);
-  w.fields.add(field);
-  lightsEdit(
-    id,
-    chan,
-    (v) => {
-      const c = findCustom(v, ref);
-      if (c) mutate(c);
-    },
-    () => {
-      const c = findCustom(viewOf(id), ref);
-      const body = {};
-      if (w.fields.has("slot")) body.slot = deepClone(c.slot);
-      if (w.fields.has("on")) body.on = c.slot.on;
-      w.fields.clear();
-      return api.patchCustom(id, ref, body);
-    },
-  );
 }
 
 // ---------------------------------------------------------------------------
@@ -4623,7 +4591,6 @@ function LightsTab(d) {
     ${StrandPicker(d, v, st)}
     ${StrandPanel(d, v, st)}
     <section aria-label="Ranges"><ul class="flex flex-col gap-2">${st.ranges.map((r, i) => RangeCard(d, v, st, r, i)).join("")}</ul></section>
-    ${CustomList(d, v, st)}
   </div>`;
 }
 
@@ -4743,19 +4710,15 @@ function Strip(d, st) {
     </div>`;
   })
   .join("");
-  const marks = st.custom
-  .map((c) => `<span class="pointer-events-none absolute -inset-y-1 rounded-sm border-2 border-dashed border-foreground/70" style="left:${pct(c.start)};width:${pct(c.len)}"></span>`)
-  .join("");
   const label = (x, cls) =>
     `<span class="${cn("absolute top-0 truncate px-1 text-center", cls)}" style="left:${pct(x.start)};width:${pct(x.len)}" title="${esc(x.name)}">${esc(x.name)}</span>`;
   return `<div class="flex flex-col gap-1.5">
     <div class="flex justify-between text-xs tabular-nums text-muted-foreground" aria-hidden="true"><span>0</span><span>${st.len - 1}</span></div>
     <div role="group" aria-label="${esc(st.name)} LEDs and range boundaries" class="relative" data-strip data-len="${st.len}">
       <div class="${cn("flex h-9 gap-px overflow-hidden rounded-md border bg-black", !st.on && "opacity-40")}" aria-hidden="true">${cellHtml}</div>
-      ${marks}${handles}
+      ${handles}
     </div>
     <div class="relative h-5 text-xs text-muted-foreground" aria-hidden="true">${st.ranges.map((r) => label(r, "")).join("")}</div>
-    ${when(st.custom.length, () => `<div class="relative h-5 text-xs italic text-muted-foreground" aria-hidden="true">${st.custom.map((c) => label({ ...c, name: c.name || "Custom" }, "")).join("")}</div>`)}
   </div>`;
 }
 
@@ -4773,7 +4736,7 @@ function RangeCard(d, v, st, r, i) {
   const pv = st.ranges[i - 1];
   const touchNext = nx && r.start + r.len === nx.start;
   const touchPrev = pv && pv.start + pv.len === r.start;
-  const flashReason = freeSegs(v) < 1 ? "Flashing needs one free segment. Remove a range or a custom range first." : "";
+  const flashReason = freeSegs(v) < 1 ? "Flashing needs one free segment. Remove a range first." : "";
   const flashBtns = ["start", "end"]
   .map(
     (w) =>
@@ -4869,7 +4832,7 @@ function PatternControls(d, v, st, r, i) {
         : n * g > 255
           ? `With group ${g}, at most ${Math.floor(255 / g) + 1} slots fit.`
           : free < 1
-            ? "No free segments. Remove a range or a custom range first."
+            ? "No free segments. Remove a range first."
             : "";
     const nDown = locked ? LOCKED : n <= 2 ? "Every N needs at least 2 slots. Use All for one." : "";
     const gUp = locked ? LOCKED : g >= 255 ? "A group can be at most 255 LEDs." : (n - 1) * (g + 1) > 255 ? `With ${n} slots, a group can be at most ${Math.floor(255 / (n - 1))} LEDs.` : "";
@@ -4942,36 +4905,6 @@ function PaintEditor(d, st, r, i) {
       class="group flex h-11 cursor-crosshair touch-none gap-px overflow-hidden rounded-md border bg-black outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background">${cellHtml}</div>
     <p id="paint-help-${esc(uid)}" class="${FORM_DESCRIPTION}">Tap or drag to paint. The lights change when you let go. With a keyboard: arrow keys move, Space paints.</p>
   </div>`;
-}
-
-function CustomList(d, v, st) {
-  if (!st.custom.length) return "";
-  return `<section aria-labelledby="custom-h" class="mt-2 flex flex-col gap-2">
-    <div class="flex flex-col gap-0.5"><h3 id="custom-h" class="text-sm font-semibold">Custom ranges</h3>
-      <p class="text-[13px] text-muted-foreground">Made outside Strand, for example in the WLED app. Strand leaves them as they are until you change them.</p></div>
-    <ul class="flex flex-col gap-2">${st.custom
-    .map((c) => {
-      const name = c.name || "Custom range";
-      const over = st.ranges.filter((r) => r.start < c.start + c.len && r.start + r.len > c.start).map((r) => r.name);
-      const reason = over.length ? `It overlaps ${listText(over)}, so it can't become a range.` : "";
-      const data = `data-id="${d.id}" data-ref="${esc(c.ref)}"`;
-      return `<li class="${CARD} flex flex-col gap-2 p-4">
-        <div class="flex items-center gap-3">
-          <div class="flex min-w-0 flex-1 flex-col gap-0.5"><span class="truncate font-medium">${esc(name)}</span><span class="text-[13px] tabular-nums text-muted-foreground">${rangeLabel(c)}</span></div>
-          ${Switch({ checked: c.slot.on, label: `Turn ${name} ${c.slot.on ? "off" : "on"}`, action: "customPower", data })}
-        </div>
-        <button type="button" id="cslot-${esc(c.ref)}" class="-mx-2 flex min-h-12 items-center gap-3 rounded-md px-2 py-2 text-left hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" data-a="openCustomSlot" ${data}>
-          ${Swatch(d.id, c.slot)}<span class="min-w-0 flex-1 truncate text-sm">${esc(slotText(d.id, c.slot))}</span>${icon("chevron-right", "size-4 text-muted-foreground")}</button>
-        <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <button type="button" class="${button({ variant: "outline", size: "sm", className: "aria-disabled:cursor-not-allowed aria-disabled:opacity-50" })}" data-a="convertCustom" ${data}${reasonAttr(
-            reason,
-          )}>Convert to range</button>
-          ${when(reason, `<p class="text-[13px] text-muted-foreground">${esc(reason)}</p>`)}
-        </div>
-      </li>`;
-    })
-    .join("")}</ul>
-  </section>`;
 }
 
 // --- Lights actions ------------------------------------------------------------
@@ -5165,12 +5098,6 @@ A.confirmSeparate = async () => {
   }
   render();
 };
-A.customPower = (el) => editCustom(el.dataset.id, el.dataset.ref, "on", (c) => (c.slot.on = !c.slot.on));
-A.convertCustom = async (el) => {
-  const { id } = el.dataset;
-  const name = findCustom(viewOf(id), el.dataset.ref)?.name || "The custom range";
-  if (await lightsCall(id, () => api.convertCustom(id, el.dataset.ref))) toast("success", `${name} is a range now`);
-};
 A.brushColor = (el) => {
   S.ui.brush = el.value.toUpperCase();
   render();
@@ -5229,13 +5156,6 @@ const LIST_ROW =
 
 function slotTarget(v, t) {
   if (!v) return null;
-  if (t.kind === "custom") {
-    for (const st of v.strands) {
-      const c = st.custom.find((x) => x.ref === t.ref);
-      if (c) return { slot: c.slot, title: c.name || "Custom range", sub: `${st.name} · ${rangeLabel(c)}`, count: 1 };
-    }
-    return null;
-  }
   const st = strandOf(v, t.key);
   const r = st?.ranges[t.r];
   const slot = r?.slots[t.s];
@@ -5252,7 +5172,6 @@ A.openSlot = (el) => {
   const { id, key, i } = dsel(el);
   openSlotSheet(id, { kind: "range", key, r: i, s: Number(el.dataset.s) }, el.id);
 };
-A.openCustomSlot = (el) => openSlotSheet(el.dataset.id, { kind: "custom", ref: el.dataset.ref }, el.id);
 
 function SlotSheet(m) {
   const t = slotTarget(viewOf(m.deviceId), m.target);
@@ -5411,8 +5330,7 @@ function SlotSheet(m) {
 
 function editSlot(m, fn) {
   const t = m.target;
-  if (t.kind === "custom") editCustom(m.deviceId, t.ref, "slot", (c) => fn(c.slot));
-  else editStrand(m.deviceId, t.key, ["ranges"], (st) => fn(st.ranges[t.r].slots[t.s]));
+  editStrand(m.deviceId, t.key, ["ranges"], (st) => fn(st.ranges[t.r].slots[t.s]));
 }
 function pushRecent(hex) {
   S.prefs.recentColors = [hex, ...S.prefs.recentColors.filter((c) => c !== hex)].slice(0, 8);
