@@ -1,20 +1,13 @@
 import type { ComponentProps } from "react"
 import { Dialog as DialogPrimitive } from "radix-ui"
 import { cn } from "@/lib/utils"
+import { Icon } from "@/components/ui/icon"
 
 /**
- * Radix dialog primitive, restyled to this repo's design system (stone
- * palette, `rounded-2xl`/16px radius, the `app-fade`/`app-pop` keyframes from
- * `src/index.css`) rather than shadcn's default `bg-background`/
- * `text-muted-foreground` CSS-variable tokens, which this project doesn't
- * define (its other `components/ui/*` primitives use direct Tailwind color
- * classes — see `card.tsx`/`button.tsx`).
- *
- * Radix supplies the focus trap, ESC-to-close, and focus-return-to-trigger
- * behavior for free. `DialogContent` only mounts (via `DialogPortal`) while
- * `open` is true. Animations use Tailwind's
- * built-in `motion-safe:` variant (no `tailwindcss-animate` plugin is
- * installed) so `prefers-reduced-motion: reduce` disables them entirely.
+ * Radix dialog primitive, styled with the design's `DIALOG_*` class strings
+ * (docs/design/strand-wled-spec.html). Radix supplies the focus trap,
+ * ESC-to-close and focus return to the trigger. Animations are behind
+ * `motion-safe:` so `prefers-reduced-motion: reduce` turns them off.
  */
 function Dialog(props: ComponentProps<typeof DialogPrimitive.Root>) {
   return <DialogPrimitive.Root data-slot="dialog" {...props} />
@@ -37,8 +30,7 @@ function DialogOverlay({ className, ...props }: ComponentProps<typeof DialogPrim
     <DialogPrimitive.Overlay
       data-slot="dialog-overlay"
       className={cn(
-        "fixed inset-0 z-50 bg-stone-900/50 backdrop-blur-[2px]",
-        "data-[state=open]:motion-safe:animate-[app-fade_0.15s_ease]",
+        "fixed inset-0 z-[80] bg-black/70 motion-safe:animate-fade-in",
         className,
       )}
       {...props}
@@ -58,8 +50,7 @@ function DialogContent({
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
-          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-2xl border border-stone-200 bg-white p-6 shadow-[0_20px_60px_rgba(0,0,0,0.3)] outline-none sm:max-w-lg",
-          "data-[state=open]:motion-safe:animate-[app-pop_0.2s_ease]",
+          "fixed left-1/2 top-1/2 z-[80] grid max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto rounded-lg border bg-background p-5 shadow-xl outline-none motion-safe:animate-dialog-in sm:p-6",
           className,
         )}
         {...props}
@@ -68,9 +59,9 @@ function DialogContent({
         {showCloseButton ? (
           <DialogPrimitive.Close
             data-slot="dialog-close"
-            className="absolute top-4 right-4 flex size-8 items-center justify-center rounded-control bg-stone-100 text-lg leading-none text-stone-500 transition-colors hover:bg-stone-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2"
+            className="absolute right-3 top-3 inline-flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
-            <span aria-hidden="true">×</span>
+            <Icon name="x" />
             <span className="sr-only">Close</span>
           </DialogPrimitive.Close>
         ) : null}
@@ -80,7 +71,7 @@ function DialogContent({
 }
 
 function DialogHeader({ className, ...props }: ComponentProps<"div">) {
-  return <div data-slot="dialog-header" className={cn("flex flex-col gap-1.5 text-left", className)} {...props} />
+  return <div data-slot="dialog-header" className={cn("flex flex-col gap-1.5 pr-8 text-left", className)} {...props} />
 }
 
 function DialogFooter({ className, ...props }: ComponentProps<"div">) {
@@ -97,7 +88,7 @@ function DialogTitle({ className, ...props }: ComponentProps<typeof DialogPrimit
   return (
     <DialogPrimitive.Title
       data-slot="dialog-title"
-      className={cn("text-lg font-bold tracking-[-0.01em] text-stone-900", className)}
+      className={cn("text-lg font-semibold leading-tight", className)}
       {...props}
     />
   )
@@ -107,7 +98,7 @@ function DialogDescription({ className, ...props }: ComponentProps<typeof Dialog
   return (
     <DialogPrimitive.Description
       data-slot="dialog-description"
-      className={cn("text-[13px] text-stone-500", className)}
+      className={cn("text-sm text-muted-foreground", className)}
       {...props}
     />
   )

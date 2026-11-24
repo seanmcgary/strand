@@ -36,14 +36,14 @@ function TooltipContent({
       <TooltipPrimitive.Content
         sideOffset={sideOffset}
         className={cn(
-          "z-50 max-w-[240px] rounded-lg bg-stone-900 px-3 py-2 text-[12px] leading-[1.4] text-white shadow-md",
+          "z-[90] max-w-[240px] rounded-md border bg-popover px-3 py-2 text-[13px] leading-snug text-popover-foreground shadow-lg",
           "data-[state=delayed-open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=delayed-open]:fade-in-0",
           className,
         )}
         {...props}
       >
         {children}
-        <TooltipPrimitive.Arrow className="fill-stone-900" />
+        <TooltipPrimitive.Arrow className="fill-popover" />
       </TooltipPrimitive.Content>
     </TooltipPrimitive.Portal>
   )

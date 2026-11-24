@@ -36,7 +36,7 @@ export const ClosedWithTrigger: Story = {
             <Button variant="secondary">Cancel</Button>
           </DialogClose>
           <DialogClose asChild>
-            <Button variant="primary">Delete</Button>
+            <Button variant="default">Delete</Button>
           </DialogClose>
         </DialogFooter>
       </DialogContent>
@@ -56,12 +56,12 @@ export const Open: Story = {
           <DialogTitle>Add a new item</DialogTitle>
           <DialogDescription>Save it once, and it&apos;ll be ready to reuse.</DialogDescription>
         </DialogHeader>
-        <p className="text-sm text-stone-600">Dialog body content goes here.</p>
+        <p className="text-sm text-muted-foreground">Dialog body content goes here.</p>
         <DialogFooter>
           <DialogClose asChild>
             <Button variant="secondary">Cancel</Button>
           </DialogClose>
-          <Button variant="primary">Save</Button>
+          <Button variant="default">Save</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
