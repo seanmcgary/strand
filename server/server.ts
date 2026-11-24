@@ -4,6 +4,7 @@ import { pino } from "pino";
 import { buildApp } from "./app";
 import { loadConfig } from "./config";
 import { openDb } from "./db/database";
+import { browseWled, resolveA } from "./mdns";
 
 const config = loadConfig(process.env);
 
@@ -12,7 +13,7 @@ try {
   const app = buildApp({
     config,
     db: openDb(path.join(config.dataDir, "strand.db")),
-    mdns: { browseWled: async () => [], resolveA: async () => null },
+    mdns: { browseWled, resolveA },
     now: () => new Date(),
     wledPort: 80,
     scanDelayMs: 1000,
