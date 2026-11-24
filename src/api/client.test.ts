@@ -42,12 +42,35 @@ describe("api", () => {
       api.getPalettes("dev1"),
       api.getPreferences(),
       api.putPreference("k.1", { a: 1 }),
+      api.getLights("dev1"),
+      api.patchLights("dev1", { on: true }),
+      api.patchStrand("dev1", "o0+o1", { on: true }),
+      api.resolveShared("dev1", "o0+o1", "split"),
+      api.flash("dev1", "o1", 5),
+      api.getStrandGroups("dev1"),
+      api.putStrandGroups("dev1", ["o0+o1"]),
+      api.putStrandNames("dev1", { o0: "Desk" }),
+      api.getScenes("dev1"),
+      api.createScene("dev1", { name: "n", strandKey: "o0" }),
+      api.renameScene("dev1", "s/1", "n"),
+      api.deleteScene("dev1", "s/1"),
+      api.applyScene("dev1", "s/1"),
+      api.getLooks("dev1"),
+      api.createLook("dev1", { name: "n", strandKey: "o0", range: "r" }),
+      api.renameLook("dev1", "l/1", "n"),
+      api.deleteLook("dev1", "l/1"),
+      api.applyLook("dev1", "l/1", [{ strandKey: "o0" }]),
     ]
     await Promise.all(calls)
 
     expect(fetchMock.mock.calls).toHaveLength(Object.keys(api).length)
     for (const [url, init] of fetchMock.mock.calls) {
-      const route = url.replace("/api/devices/dev1", "/api/devices/:id").replace("/api/preferences/k.1", "/api/preferences/:key")
+      const route = url
+        .replace("/api/devices/dev1", "/api/devices/:id")
+        .replace("/api/preferences/k.1", "/api/preferences/:key")
+        .replace("/strands/o0%2Bo1", "/strands/:key")
+        .replace("/scenes/s%2F1", "/scenes/:sceneId")
+        .replace("/looks/l%2F1", "/looks/:lookId")
       const method = init?.method as "GET"
       expect(t.app.hasRoute({ method, url: route }), `${method} ${route}`).toBe(true)
     }
@@ -69,6 +92,40 @@ describe("api", () => {
     await api.getInfo("a/b")
 
     expect(fetchMock.mock.calls[0]![0]).toBe("/api/devices/a%2Fb/info")
+  })
+})
+
+describe("lights, scene and look functions", () => {
+  const cases: [string, () => Promise<unknown>, string, string, unknown?][] = [
+    ["getLights", () => api.getLights("a/b"), "GET", "/api/devices/a%2Fb/lights"],
+    ["patchLights", () => api.patchLights("d", { bri: 5 }), "PATCH", "/api/devices/d/lights", { bri: 5 }],
+    ["patchStrand", () => api.patchStrand("a/b", "o0+o1", { on: true }), "PATCH", "/api/devices/a%2Fb/lights/strands/o0%2Bo1", { on: true }],
+    ["resolveShared", () => api.resolveShared("d", "o0", "split"), "POST", "/api/devices/d/lights/strands/o0/resolve", { action: "split" }],
+    ["flash", () => api.flash("d", "o1", 5), "POST", "/api/devices/d/lights/flash", { strandKey: "o1", led: 5 }],
+    ["getStrandGroups", () => api.getStrandGroups("d"), "GET", "/api/devices/d/strand-groups"],
+    ["putStrandGroups", () => api.putStrandGroups("d", ["o0+o1"]), "PUT", "/api/devices/d/strand-groups", { keys: ["o0+o1"] }],
+    ["putStrandNames", () => api.putStrandNames("d", { o0: "Desk" }), "PUT", "/api/devices/d/strand-names", { names: { o0: "Desk" } }],
+    ["getScenes", () => api.getScenes("d"), "GET", "/api/devices/d/scenes"],
+    ["createScene", () => api.createScene("d", { name: "n", strandKey: "o0" }), "POST", "/api/devices/d/scenes", { name: "n", strandKey: "o0" }],
+    ["renameScene", () => api.renameScene("d", "s/1", "n"), "PATCH", "/api/devices/d/scenes/s%2F1", { name: "n" }],
+    ["deleteScene", () => api.deleteScene("d", "s/1"), "DELETE", "/api/devices/d/scenes/s%2F1"],
+    ["applyScene", () => api.applyScene("d", "s/1"), "POST", "/api/devices/d/scenes/s%2F1/apply"],
+    ["getLooks", () => api.getLooks("d"), "GET", "/api/devices/d/looks"],
+    ["createLook", () => api.createLook("d", { name: "n", strandKey: "o0", range: "r" }), "POST", "/api/devices/d/looks", { name: "n", strandKey: "o0", range: "r" }],
+    ["renameLook", () => api.renameLook("d", "l/1", "n"), "PATCH", "/api/devices/d/looks/l%2F1", { name: "n" }],
+    ["deleteLook", () => api.deleteLook("d", "l/1"), "DELETE", "/api/devices/d/looks/l%2F1"],
+    ["applyLook", () => api.applyLook("d", "l", [{ strandKey: "o0" }]), "POST", "/api/devices/d/looks/l/apply", { targets: [{ strandKey: "o0" }] }],
+  ]
+
+  // Fails if a client function sends the wrong method, path encoding or body shape.
+  it.each(cases)("%s sends its method, path and body", async (_name, call, method, path, body) => {
+    const fetchMock = stubFetch(json({}))
+    await call()
+
+    const [url, init] = fetchMock.mock.calls[0]!
+    expect(url).toBe(path)
+    expect(init?.method).toBe(method)
+    expect(init?.body).toBe(body === undefined ? undefined : JSON.stringify(body))
   })
 })
 

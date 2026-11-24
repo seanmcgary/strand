@@ -1,13 +1,20 @@
 import type {
   ApiErrorBody,
+  ApplyResult,
   Capabilities,
   ConfigPatch,
   Device,
   DiscoveredDevice,
   Effect,
   ErrorCode,
+  LightsPatch,
+  LightsView,
+  LookRecord,
+  LookTarget,
   Palette,
   PinInfo,
+  Scene,
+  StrandPatch,
   StatePatch,
   WifiNetwork,
   WledConfig,
@@ -57,6 +64,7 @@ export async function request<T>(method: string, path: string, body?: unknown): 
 }
 
 const device = (id: string) => `/api/devices/${encodeURIComponent(id)}`
+const seg = encodeURIComponent
 
 export const api = {
   listDevices: () => request<Device[]>("GET", "/api/devices"),
@@ -80,4 +88,33 @@ export const api = {
   getPreferences: () => request<Record<string, unknown>>("GET", "/api/preferences"),
   putPreference: (key: string, value: unknown) =>
     request<void>("PUT", `/api/preferences/${encodeURIComponent(key)}`, { value }),
+  getLights: (id: string) => request<LightsView>("GET", `${device(id)}/lights`),
+  patchLights: (id: string, body: LightsPatch) => request<LightsView>("PATCH", `${device(id)}/lights`, body),
+  patchStrand: (id: string, key: string, body: StrandPatch) =>
+    request<LightsView>("PATCH", `${device(id)}/lights/strands/${seg(key)}`, body),
+  resolveShared: (id: string, key: string, action: "split" | "combine") =>
+    request<LightsView>("POST", `${device(id)}/lights/strands/${seg(key)}/resolve`, { action }),
+  flash: (id: string, strandKey: string, led: number) =>
+    request<void>("POST", `${device(id)}/lights/flash`, { strandKey, led }),
+  getStrandGroups: (id: string) => request<string[]>("GET", `${device(id)}/strand-groups`),
+  putStrandGroups: (id: string, keys: string[]) =>
+    request<LightsView>("PUT", `${device(id)}/strand-groups`, { keys }),
+  putStrandNames: (id: string, names: Record<string, string>) =>
+    request<LightsView>("PUT", `${device(id)}/strand-names`, { names }),
+  getScenes: (id: string) => request<Scene[]>("GET", `${device(id)}/scenes`),
+  createScene: (id: string, body: { name: string; strandKey: string }) =>
+    request<Scene>("POST", `${device(id)}/scenes`, body),
+  renameScene: (id: string, sceneId: string, name: string) =>
+    request<Scene>("PATCH", `${device(id)}/scenes/${seg(sceneId)}`, { name }),
+  deleteScene: (id: string, sceneId: string) => request<void>("DELETE", `${device(id)}/scenes/${seg(sceneId)}`),
+  applyScene: (id: string, sceneId: string) =>
+    request<ApplyResult>("POST", `${device(id)}/scenes/${seg(sceneId)}/apply`),
+  getLooks: (id: string) => request<LookRecord[]>("GET", `${device(id)}/looks`),
+  createLook: (id: string, body: { name: string; strandKey: string; range: string }) =>
+    request<LookRecord>("POST", `${device(id)}/looks`, body),
+  renameLook: (id: string, lookId: string, name: string) =>
+    request<LookRecord>("PATCH", `${device(id)}/looks/${seg(lookId)}`, { name }),
+  deleteLook: (id: string, lookId: string) => request<void>("DELETE", `${device(id)}/looks/${seg(lookId)}`),
+  applyLook: (id: string, lookId: string, targets: LookTarget[]) =>
+    request<ApplyResult>("POST", `${device(id)}/looks/${seg(lookId)}/apply`, { targets }),
 }
