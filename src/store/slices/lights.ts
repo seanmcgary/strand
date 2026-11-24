@@ -72,22 +72,26 @@ function chan(state: LightsState, id: string, key: string): WriteChannel {
 
 /**
  * Takes a server view, but keeps the strands whose own channel is still sending or painting:
- * their optimistic values are newer than the answer.
+ * their optimistic values are newer than the answer, and the segments they add still count.
  */
 function adopt(state: LightsState, id: string, view: LightsView) {
   const d = dev(state, id)
   const cur = d.view
-  d.view = {
-    ...view,
-    strands: view.strands.map((s) => {
-      const w = state.writes[writeKey(id, s.key)]
-      const keep = w && (w.busy || w.hold) ? strandOf(cur, s.key) : undefined
-      return keep ?? s
-    }),
-  }
+  let pending = 0
+  const strands = view.strands.map((s) => {
+    const w = state.writes[writeKey(id, s.key)]
+    const keep = w && (w.busy || w.hold) ? strandOf(cur, s.key) : undefined
+    if (!keep) return s
+    pending += segsNeeded(s, keep.ranges)
+    return keep
+  })
+  d.view = { ...view, strands, segments: { ...view.segments, used: view.segments.used + pending } }
 }
 
-/** Puts a strand back as `base` had it, with its segment count. Other strands keep their values. */
+/**
+ * Puts a strand back as `base` had it, with its segment count. Other strands keep their values.
+ * During a paint stroke the channel stays on hold, so the quiet re-read does not replace the strand mid-stroke.
+ */
 function rollback(state: LightsState, id: string, key: string) {
   const w = state.writes[writeKey(id, key)]
   const v = state.devices[id]?.view
@@ -97,7 +101,8 @@ function rollback(state: LightsState, id: string, key: string) {
     v.segments.used -= segsNeeded(was, v.strands[i]!.ranges)
     v.strands[i] = was
   }
-  delete state.writes[writeKey(id, key)]
+  if (w?.hold && v) state.writes[writeKey(id, key)] = { busy: false, base: current(v), dirty: [], hold: true }
+  else delete state.writes[writeKey(id, key)]
 }
 
 // API calls. Every one goes through createApiThunk; the thunks below compose them.
@@ -169,9 +174,15 @@ export const lightsSlice = createSlice({
       const { id, key, view } = action.payload
       const w = chan(state, id, key)
       w.busy = false
+      // A paint stroke started while this was in flight: drop the answer so the stroke keeps its cells.
+      // `endPaint` sends again, and that answer carries the other strands' updates.
       if (w.hold) return
       delete state.writes[writeKey(id, key)]
       adopt(state, id, view)
+    },
+    /** The strand left the view while its write was in flight; nothing is left to send. */
+    dropped(state, action: PayloadAction<{ id: string; key: string }>) {
+      delete state.writes[writeKey(action.payload.id, action.payload.key)]
     },
     failed(state, action: PayloadAction<{ id: string; key: string }>) {
       rollback(state, action.payload.id, action.payload.key)
@@ -221,8 +232,10 @@ export const lightsSlice = createSlice({
       const { id, key, action: how } = action.meta.arg
       const d = dev(state, id)
       if (how === "combine") {
-        const members = [...key.split("+"), ...(strandOf(d.view, key)?.shared?.with ?? [])]
-        d.selected = members.sort((a, b) => Number(a.slice(1)) - Number(b.slice(1))).join("+")
+        // The server keys a combination by its members in LED order.
+        const keys = [key, ...(strandOf(d.view, key)?.shared?.with ?? [])]
+        const start = (k: string) => strandOf(d.view, k)?.start ?? Infinity
+        d.selected = keys.sort((a, b) => start(a) - start(b)).join("+")
       }
       adopt(state, id, action.payload)
     })
@@ -263,7 +276,7 @@ export const lightsSlice = createSlice({
 })
 
 export const { adoptView, selectStrand, selectRange, paintCells } = lightsSlice.actions
-const { edited, sending, settled, failed, paintBegan, paintEnded, flashSet, flashCleared } = lightsSlice.actions
+const { edited, sending, settled, dropped, failed, paintBegan, paintEnded, flashSet, flashCleared } = lightsSlice.actions
 
 type LightsRoot = { lights: LightsState; toasts: ToastsState }
 type LightsDispatch = ThunkDispatch<LightsRoot, unknown, UnknownAction>
@@ -293,7 +306,10 @@ const pump =
       const { lights } = getState()
       const w = lights.writes[writeKey(id, key)]
       const st = strandOf(lights.devices[id]?.view, key)
-      if (!w || !st) return
+      if (!w || !st) {
+        dispatch(dropped({ id, key }))
+        return
+      }
       const body: StrandPatch = {}
       for (const f of w.dirty) Object.assign(body, { [f]: structuredClone(st[f]) })
       dispatch(sending({ id, key }))

@@ -4,6 +4,7 @@ import { api, ApiError } from "@/api/client"
 import { makeStore } from "../index"
 import { toastsSlice } from "./toasts"
 import {
+  adoptView,
   beginPaint,
   editStrand,
   endPaint,
@@ -14,7 +15,6 @@ import {
   paintCells,
   resolveShared,
   selectLights,
-  selectedStrand,
   setStrandGroups,
   setStrandName,
 } from "./lights"
@@ -174,6 +174,54 @@ describe("strand writes", () => {
     expect(patch).toHaveBeenCalledTimes(1)
   })
 
+  // Fails if a channel whose strand vanished mid-write stays busy, so later edits to that key never send.
+  it("sends edits to a strand that left the view and came back", async () => {
+    const { store } = await setup(makeView(roomy))
+    const first = deferred<LightsView>()
+    const patch = vi.spyOn(api, "patchStrand").mockReturnValueOnce(first.promise).mockReturnValue(new Promise(() => {}))
+
+    store.dispatch(editStrand({ id: "d1", key: "o0", patch: { bri: 10 } }))
+    store.dispatch(editStrand({ id: "d1", key: "o0", patch: { bri: 20 } }))
+    store.dispatch(adoptView({ id: "d1", view: makeView({ ...roomy, strands: [strand("o1", 100, 50)] }) }))
+    first.resolve(makeView(roomy))
+    await flush()
+    store.dispatch(adoptView({ id: "d1", view: makeView(roomy) }))
+    store.dispatch(editStrand({ id: "d1", key: "o0", patch: { bri: 30 } }))
+
+    expect(patch).toHaveBeenCalledTimes(2)
+  })
+
+  // Fails if adopting an answer drops the segments another strand's in-flight edit has taken.
+  it("keeps the segments of another strand's in-flight edit", async () => {
+    const { store, lights } = await setup(makeView(roomy))
+    const o1Call = deferred<LightsView>()
+    const o0Call = deferred<LightsView>()
+    vi.spyOn(api, "patchStrand").mockReturnValueOnce(o1Call.promise).mockReturnValueOnce(o0Call.promise)
+
+    store.dispatch(editStrand({ id: "d1", key: "o1", patch: { ranges: [range("A", 0, 25), range("B", 25, 25)] } }))
+    store.dispatch(editStrand({ id: "d1", key: "o0", patch: { bri: 30 } }))
+    o0Call.resolve(makeView(roomy, { bri: 30 }))
+    await flush()
+
+    expect(lights().view!.segments.used).toBe(3)
+  })
+
+  // Fails if a failed write during a paint stroke ends the hold, so the quiet re-read replaces the strand mid-stroke.
+  it("keeps a paint stroke's hold through a failed write", async () => {
+    const { store, lights, getLights } = await setup()
+    const first = deferred<LightsView>()
+    vi.spyOn(api, "patchStrand").mockReturnValueOnce(first.promise)
+    getLights.mockResolvedValueOnce(makeView({}, { name: "Eaves" }))
+
+    store.dispatch(editStrand({ id: "d1", key: "o0", patch: { bri: 10 } }))
+    store.dispatch(beginPaint({ id: "d1", key: "o0" }))
+    first.reject(new ApiError(504, "device_offline", "m"))
+    await flush()
+
+    expect(lights().view!.strands[0]).toMatchObject({ name: "o0", bri: 128 })
+    expect(store.getState().lights.writes["d1|o0"]?.hold).toBe(true)
+  })
+
   // Fails if painting sends before the release, or sends anything but the painted ranges.
   it("sends a paint stroke once, on release", async () => {
     const painted = range("A", 0, 4, { pattern: { kind: "individual" }, paint: Array(4).fill("#000000") })
@@ -218,16 +266,17 @@ describe("flashLed", () => {
 })
 
 describe("server-side strand changes", () => {
-  // Fails if combining does not select the joined strand or skips the success toast.
+  // Fails if combining does not select the joined strand (members in LED order, as the server keys it) or skips the toast.
   it("selects the combined strand after combine", async () => {
-    const shared = makeView({}, { shared: { with: ["o1"] } })
-    const { store, titles } = await setup(shared)
-    const joined = makeView({ strands: [strand("o0+o1", 0, 150)] })
+    // o1 comes first on the wire, so the server's key is "o1+o0".
+    const shared = makeView({ strands: [strand("o1", 0, 50, { shared: { with: ["o0"] } }), strand("o0", 50, 100)] })
+    const { store, lights, titles } = await setup(shared)
+    const joined = makeView({ strands: [strand("o1+o0", 0, 150)] })
     vi.spyOn(api, "resolveShared").mockResolvedValueOnce(joined)
 
-    await store.dispatch(resolveShared({ id: "d1", key: "o0", action: "combine" }))
+    await store.dispatch(resolveShared({ id: "d1", key: "o1", action: "combine" }))
 
-    expect(selectedStrand(store.getState(), "d1")?.key).toBe("o0+o1")
+    expect(lights().selected).toBe("o1+o0")
     expect(titles()).toEqual(["Strands combined"])
   })
 

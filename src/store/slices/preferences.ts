@@ -45,11 +45,11 @@ export const preferencesSlice = createSlice({
 type PrefsRoot = { preferences: PreferencesState }
 type PrefsDispatch = ThunkDispatch<PrefsRoot, unknown, UnknownAction>
 
-/** Puts `hex` first in the recent colors (unique, at most 8) and saves the list. A failed save keeps the local list. */
+/** Puts `hex` first in the recent colors (unique, at most 8) and saves the list. A failed save keeps the local list; nothing is saved until the stored lists load, so they are not overwritten. */
 export const pushRecentColor = (hex: string) => (dispatch: PrefsDispatch, getState: () => PrefsRoot) => {
   const next = [hex, ...getState().preferences.recentColors.filter((c) => c !== hex)].slice(0, MAX_RECENT)
   dispatch(preferencesSlice.actions.recentColorsSet(next))
-  return dispatch(savePreference({ key: RECENT_KEY, value: next }))
+  if (getState().preferences.loaded) return dispatch(savePreference({ key: RECENT_KEY, value: next }))
 }
 
 /** Adds the effect to the favorites, or removes it, and saves the list. */
@@ -57,5 +57,5 @@ export const toggleFavoriteEffect = (name: string) => (dispatch: PrefsDispatch, 
   const f = getState().preferences.favoriteEffects
   const next = f.includes(name) ? f.filter((x) => x !== name) : [...f, name]
   dispatch(preferencesSlice.actions.favoriteEffectsSet(next))
-  return dispatch(savePreference({ key: FAVORITES_KEY, value: next }))
+  if (getState().preferences.loaded) return dispatch(savePreference({ key: FAVORITES_KEY, value: next }))
 }
