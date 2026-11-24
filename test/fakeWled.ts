@@ -35,6 +35,8 @@ export type FakeWled = {
   requests: { method: string; path: string; body: unknown }[];
   setMode(m: FakeMode): void;
   failNext(m: FakeMode, match: { method?: string; path?: string; skip?: number }): void;
+  /** Holds the next matching request before it is handled, until the returned function is called. */
+  hold(match: { method?: string; path?: string }): () => void;
   /** Reboots: the uptime restarts and the segments boot from `cfg.def` and the boot preset. */
   restart(): void;
   cfg: Record<string, unknown>;
@@ -72,6 +74,7 @@ export async function startFakeWled(seed: Seed, opts: FakeOpts = {}): Promise<Fa
   const requests: FakeWled["requests"] = [];
   let mode: FakeMode = "ok";
   const pending: { mode: FakeMode; method?: string; path?: string; skip: number }[] = [];
+  const holds: { method?: string; path?: string; released: Promise<void> }[] = [];
   let unlocked = false;
   let netCalls = 0;
   let bootAt = Date.now();
@@ -154,6 +157,12 @@ export async function startFakeWled(seed: Seed, opts: FakeOpts = {}): Promise<Fa
   app.addHook("preHandler", async (request, reply) => {
     const entry = recorded.get(request);
     if (entry) entry.body = request.body;
+    const pathname = request.url.split("?")[0];
+    const held = holds.find((h) => (!h.method || h.method === request.method) && (!h.path || h.path === request.url || h.path === pathname));
+    if (held) {
+      holds.splice(holds.indexOf(held), 1);
+      await held.released;
+    }
     switch (modeFor(request)) {
       case "ok":
         return;
@@ -258,6 +267,11 @@ export async function startFakeWled(seed: Seed, opts: FakeOpts = {}): Promise<Fa
     },
     failNext(m, match) {
       pending.push({ mode: m, method: match.method, path: match.path, skip: match.skip ?? 0 });
+    },
+    hold(match) {
+      let release = (): void => {};
+      holds.push({ ...match, released: new Promise<void>((resolve) => (release = resolve)) });
+      return () => release();
     },
     restart,
     cfg,

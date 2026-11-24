@@ -40,6 +40,8 @@ export type PaintMap = Record<string, string[]>;
 export type Lists = { effects: string[]; palettes: string[] };
 
 export const FLASH_NAME = "Strand flash";
+/** The name tag of an Individual (painted) range's segment. */
+export const PAINT_TAG = " paint";
 /** The firmware's segment name limit on ESP8266 (`const.h:175-180`), the stricter one. */
 export const NAME_BYTES = 32;
 
@@ -48,8 +50,8 @@ const MAX_EVERY = 16;
 
 type Json = Record<string, unknown>;
 
-const isObject = (v: unknown): v is Json => typeof v === "object" && v !== null && !Array.isArray(v);
-const isInt = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v);
+export const isObject = (v: unknown): v is Json => typeof v === "object" && v !== null && !Array.isArray(v);
+export const isInt = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v);
 const intIn = (v: unknown, min: number, max: number, dflt: number): number => (isInt(v) && v >= min && v <= max ? v : dflt);
 const bool = (v: unknown): boolean => (typeof v === "boolean" ? v : false);
 const isColor = (v: unknown): v is number[] => Array.isArray(v) && (v.length === 3 || v.length === 4) && v.every((c) => intIn(c, 0, 255, -1) >= 0);
@@ -163,7 +165,7 @@ export function strandsFromConfig(cfg: WledConfig, groupKeys: string[], names: R
 
 /** A segment name: the base cut by bytes, on a UTF-8 boundary, so the whole tag fits in `NAME_BYTES`. */
 export function segmentName(base: string, tag: "" | "paint" | { k: number; n: number }): string {
-  const suffix = tag === "" ? "" : tag === "paint" ? " paint" : ` ${tag.k}/${tag.n}`;
+  const suffix = tag === "" ? "" : tag === "paint" ? PAINT_TAG : ` ${tag.k}/${tag.n}`;
   return cutBytes(base, NAME_BYTES - encoder.encode(suffix).length) + suffix;
 }
 

@@ -1,28 +1,12 @@
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { seeds } from "../../test/fixtures/seeds";
-import { startFakeWled, type FakeWled } from "../../test/fakeWled";
-import { makeTestApp } from "../../test/testApp";
-import type { DeviceRow } from "../db/devices";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { bigSeed, psaves, startLights } from "../../test/lightsRuntime";
+import type { FakeWled } from "../../test/fakeWled";
+import { readDeviceLights, notices } from "./deviceLights";
 import { encodePaint } from "./layoutRead";
-import { createLightsRuntime, type LightsRuntime, type RuntimeLog } from "./runtime";
 
-const seed = seeds.backyard;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const setup = (times: { startupDelayMs?: number; flashMs?: number }, warn?: () => void) => startLights({ ...times, warn });
 
-type Setup = { f: FakeWled; row: DeviceRow; rt: LightsRuntime; warn: ReturnType<typeof vi.fn> };
-
-async function setup(times: { startupDelayMs?: number; flashMs?: number }, warnImpl?: () => void): Promise<Setup> {
-  const t = makeTestApp();
-  const f = await startFakeWled(seed);
-  onTestFinished(() => f.close());
-  const row = t.addFake(f, seed);
-  const warn = vi.fn(warnImpl);
-  const rt = createLightsRuntime({ ...t.deps, startupDelayMs: times.startupDelayMs ?? 60_000, flashMs: times.flashMs ?? 60_000 }, { warn } as unknown as RuntimeLog);
-  onTestFinished(() => rt.close());
-  return { f, row, rt, warn };
-}
-
-const psaves = (f: FakeWled) => f.requests.filter((r) => r.method === "POST" && r.path === "/json/state" && (r.body as { psave?: unknown } | undefined)?.psave === 250);
 const segOf = (body: unknown, name: string) => (body as { seg: { n?: string; i?: unknown }[] }).seg.find((s) => s.n === name);
 
 const A = Array<string>(10).fill("#FF0000");
@@ -46,7 +30,7 @@ describe("startup timer", () => {
     rt.afterWrite(row);
     await sleep(30);
     rt.afterWrite(row);
-    await sleep(60);
+    await sleep(78);
     expect(psaves(f)).toHaveLength(0);
     await sleep(200);
     expect(psaves(f)).toHaveLength(1);
@@ -112,6 +96,54 @@ describe("startup timer", () => {
     await sleep(120);
     expect(psaves(f)).toHaveLength(0);
     await vi.waitFor(() => expect(psaves(f)).toHaveLength(1));
+  });
+
+  // Fails if a timer may fire a save less than startupDelayMs after the last one was sent.
+  it("keeps startupDelayMs between two saves", async () => {
+    const { f, row, rt } = await setup({ startupDelayMs: 200 });
+    const sent: number[] = [];
+    f.afterPost(() => {
+      sent.push(Date.now());
+      f.afterPost(() => sent.push(Date.now()));
+    });
+    const release = f.hold({ method: "GET", path: "/presets.json" });
+    rt.afterWrite(row);
+    await vi.waitFor(() => expect(f.requests.some((r) => r.path === "/presets.json")).toBe(true));
+    await sleep(50);
+    rt.afterWrite(row);
+    await sleep(150);
+    release();
+    await vi.waitFor(() => expect(sent).toHaveLength(2), { timeout: 2000 });
+    expect(sent[1]! - sent[0]!).toBeGreaterThanOrEqual(195);
+  });
+
+  // Fails if a preset over the device's JSON buffer is sent with its paint, or the view does not say the paint is not kept.
+  it("saves without paint when the paint is too large, and says so until a save with paint", async () => {
+    const s = await startLights({ startupDelayMs: 20, seed: bigSeed(16) });
+    s.f.applyState({ seg: [{ id: 0, start: 0, stop: 1000, n: "Big paint", frz: true }] });
+    const stripes = Array.from({ length: 1000 }, (_, k) => (k % 2 === 0 ? "#FF0000" : "#0000FF"));
+    s.rt.rememberPaint(s.row.id, { "Big paint": stripes });
+    s.rt.afterWrite(s.row);
+    await vi.waitFor(() => expect(psaves(s.f)).toHaveLength(1));
+    const body = psaves(s.f)[0]!.body as { seg: Record<string, unknown>[] };
+    expect(body.seg[0]).not.toHaveProperty("i");
+    expect(body.seg[0]).not.toHaveProperty("frz");
+    await vi.waitFor(async () => expect((await readDeviceLights(s.deps, s.row)).view.notices).toEqual([notices.paintNotSaved]));
+
+    s.rt.rememberPaint(s.row.id, { "Big paint": Array<string>(1000).fill("#00FF00") });
+    s.rt.afterWrite(s.row);
+    await vi.waitFor(() => expect(psaves(s.f)).toHaveLength(2));
+    await vi.waitFor(async () => expect((await readDeviceLights(s.deps, s.row)).view.notices).toEqual([]));
+  });
+
+  // Fails if a preset that is too large even without paint is sent, or the view does not say the setup is not kept.
+  it("skips a save that is too large without paint, and says so", async () => {
+    const s = await startLights({ startupDelayMs: 20, seed: bigSeed(64) });
+    const name = (k: number) => `Range number ${String(k).padStart(2, "0")} of many!!`;
+    s.f.applyState({ seg: Array.from({ length: 60 }, (_, k) => ({ id: k, start: k * 16, stop: k * 16 + 16, n: name(k) })) });
+    s.rt.afterWrite(s.row);
+    await vi.waitFor(async () => expect((await readDeviceLights(s.deps, s.row)).view.notices).toEqual([notices.tooLarge]));
+    expect(psaves(s.f)).toHaveLength(0);
   });
 
   // Fails if close() leaves a startup timer running.

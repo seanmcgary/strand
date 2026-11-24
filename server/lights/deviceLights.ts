@@ -10,6 +10,9 @@ import {
   decodePaint,
   encodePaint,
   FLASH_NAME,
+  isInt,
+  isObject,
+  PAINT_TAG,
   parseState,
   readLayout,
   strandsFromConfig,
@@ -39,14 +42,16 @@ export type DeviceLights = {
   view: LightsView;
 };
 
-const SEPARATED = "A combined strand was separated because its LED outputs no longer touch.";
+/** The Lights tab's notices (`LightsView.notices`). */
+export const notices = {
+  separated: "A combined strand was separated because its LED outputs no longer touch.",
+  paintNotSaved: "Painted colors won't survive a restart: there are too many painted LEDs to save on this controller.",
+  tooLarge: "Your setup is too large to keep after a restart.",
+};
 /** The most color runs (`start, stop, "RRGGBB"`) in one request, to stay under the device's JSON buffer. */
 const RUNS_PER_REQUEST = 256;
-const PAINT_TAG = " paint";
 
 type Json = Record<string, unknown>;
-const isObject = (v: unknown): v is Json => typeof v === "object" && v !== null && !Array.isArray(v);
-const isInt = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v);
 
 const invalid = (name: string): ApiError => new ApiError(502, "device_error", messages.deviceError(name, "the reply is not valid"));
 
@@ -87,12 +92,16 @@ async function readPaint(deps: ServerDeps, row: DeviceRow): Promise<PaintMap> {
   return { ...startupPaint(presets), ...deps.lights.paintFor(row.id) };
 }
 
-function viewOf(d: Omit<DeviceLights, "view">, maxseg: number, matrix: boolean): LightsView {
-  const notices = d.dropped.length > 0 ? [SEPARATED] : [];
+function viewOf(deps: ServerDeps, d: Omit<DeviceLights, "view">, maxseg: number, matrix: boolean): LightsView {
+  const issue = deps.lights.startupIssue(d.row.id);
+  const list = [
+    ...(d.dropped.length > 0 ? [notices.separated] : []),
+    ...(issue === "paint" ? [notices.paintNotSaved] : issue === "size" ? [notices.tooLarge] : []),
+  ];
   if (matrix) {
-    return { on: d.state.on, bri: d.state.bri, strands: [], segments: { used: d.state.seg.length, max: maxseg }, notices, matrix: true };
+    return { on: d.state.on, bri: d.state.bri, strands: [], segments: { used: d.state.seg.length, max: maxseg }, notices: list, matrix: true };
   }
-  return { ...readLayout(d.state, d.strands, d.lists, d.paint, maxseg), notices, matrix: false };
+  return { ...readLayout(d.state, d.strands, d.lists, d.paint, maxseg), notices: list, matrix: false };
 }
 
 /** Reads a device's lights. It writes nothing to the device or the database (Plan decision 13). */
@@ -111,7 +120,7 @@ export async function readDeviceLights(deps: ServerDeps, row: DeviceRow): Promis
   const names = namesOf(preferences.get(deps.db, `strandNames.${row.id}`));
   const { strands, dropped } = strandsFromConfig(cfg, strandGroups.list(deps.db, row.id), names);
   const d = { row, state, info, lists, strands, dropped, paint };
-  return { ...d, view: viewOf(d, maxseg, isObject((info.leds as unknown as Json).matrix)) };
+  return { ...d, view: viewOf(deps, d, maxseg, isObject((info.leds as unknown as Json).matrix)) };
 }
 
 /**
@@ -123,16 +132,51 @@ export async function clearLeftovers(deps: ServerDeps, d: DeviceLights): Promise
   if (d.dropped.length > 0) {
     strandGroups.replace(deps.db, d.row.id, strandGroups.list(deps.db, d.row.id).filter((k) => !d.dropped.includes(k)));
   }
-  let state = d.state;
-  const flashes = state.seg.filter((s) => s.n === FLASH_NAME);
-  if (flashes.length > 0 && !deps.lights.flashActive(d.row.id)) {
-    const target = targetOf(d.row);
-    await deviceRequest(deps, target, "/json/state", { method: "POST", body: { seg: flashes.map((s) => ({ id: s.id, stop: 0 })) } });
-    state = parseState(await deviceRequest<unknown>(deps, target, "/json/state"));
-  }
+  const state =
+    d.state.seg.some((s) => s.n === FLASH_NAME) && !deps.lights.flashActive(d.row.id)
+      ? await deps.lights.run(d.row.id, () => deleteFlashes(deps, d.row, true))
+      : d.state;
   if (d.dropped.length === 0 && state === d.state) return d;
   const next = { ...d, state, dropped: [] };
-  return { ...next, view: viewOf(next, d.view.segments.max, d.view.matrix) };
+  return { ...next, view: viewOf(deps, next, d.view.segments.max, d.view.matrix) };
+}
+
+/**
+ * Reads the state and deletes every segment named `FLASH_NAME`, by its ID in
+ * that read. Returns the state after the delete (`reread`), or the state it read.
+ * Call it inside `run`.
+ */
+async function deleteFlashes(deps: ServerDeps, row: DeviceRow, reread: boolean): Promise<WledState> {
+  const target = targetOf(row);
+  const state = parseState(await deviceRequest<unknown>(deps, target, "/json/state"));
+  const flashes = state.seg.filter((s) => s.n === FLASH_NAME);
+  if (flashes.length === 0) return state;
+  await deviceRequest(deps, target, "/json/state", { method: "POST", body: { seg: flashes.map((s) => ({ id: s.id, stop: 0 })) } });
+  return reread ? parseState(await deviceRequest<unknown>(deps, target, "/json/state")) : state;
+}
+
+/**
+ * Lights one LED (`start`, from the device's first LED) white for `flashMs`
+ * (spec §6.6). In one request it deletes every flash segment and creates one at
+ * the highest ID that no other segment uses. The end deletes the flash
+ * segments it finds by name, so it never deletes a segment that took a remembered ID.
+ */
+export async function flashLed(deps: ServerDeps, d: DeviceLights, start: number): Promise<void> {
+  const { row } = d;
+  await deps.lights.run(row.id, async () => {
+    const target = targetOf(row);
+    const state = parseState(await deviceRequest<unknown>(deps, target, "/json/state"));
+    const others = new Set(state.seg.filter((s) => s.n !== FLASH_NAME).map((s) => s.id));
+    let id = d.view.segments.max - 1;
+    while (id >= 0 && others.has(id)) id--;
+    if (id < 0) throw new ApiError(422, "segment_budget", messages.segmentBudget(1, 0), { need: 1 });
+    const deletes = state.seg.filter((s) => s.n === FLASH_NAME && s.id !== id).map((s) => ({ id: s.id, stop: 0 }));
+    const flash = { id, start, stop: start + 1, fx: 0, col: [[255, 255, 255]], bri: 255, on: true, n: FLASH_NAME };
+    await deviceRequest(deps, target, "/json/state", { method: "POST", body: { seg: [...deletes, flash] } });
+    deps.lights.startFlash(row.id, async () => {
+      await deps.lights.run(row.id, () => deleteFlashes(deps, row, false));
+    });
+  });
 }
 
 /** Splits a `seg.i` array into requests of at most `RUNS_PER_REQUEST` runs. */
@@ -156,19 +200,21 @@ export async function writeLayout(deps: ServerDeps, d: DeviceLights, write: Layo
     await deviceRequest(deps, target, "/json/state", { method: "POST", body });
   };
   try {
-    for (const seg of write.seg) await post({ seg });
-    if (write.paint.length > 0) {
+    await deps.lights.run(d.row.id, async () => {
+      for (const seg of write.seg) await post({ seg });
+      if (write.paint.length === 0) return;
       const state = parseState(await deviceRequest<unknown>(deps, target, "/json/state"));
       const byName = new Map(state.seg.filter((s) => s.n !== undefined).map((s) => [s.n!, s]));
       if (write.paint.some((p) => !byName.has(p.name))) throw new ApiError(409, "strand_changed", messages.strandChanged());
-      const remembered: PaintMap = {};
+      // Remembered before it is sent: after a failed chunk the next save then writes the new paint, never the old.
+      deps.lights.rememberPaint(
+        d.row.id,
+        Object.fromEntries(write.paint.map((p) => [p.name, decodePaint(p.i, byName.get(p.name)!.stop - byName.get(p.name)!.start)])),
+      );
       for (const p of write.paint) {
-        const seg = byName.get(p.name)!;
-        for (const i of paintChunks(p.i)) await post({ seg: { id: seg.id, i } });
-        remembered[p.name] = decodePaint(p.i, seg.stop - seg.start);
+        for (const i of paintChunks(p.i)) await post({ seg: { id: byName.get(p.name)!.id, i } });
       }
-      deps.lights.rememberPaint(d.row.id, remembered);
-    }
+    });
   } catch (err) {
     if (sent) deps.lights.afterWrite(d.row);
     throw err;
@@ -183,6 +229,10 @@ export async function writeLayout(deps: ServerDeps, d: DeviceLights, write: Layo
  * segment at power-on (spec §6.4, Plan decision 12). It does not schedule a startup save.
  */
 export async function setDevicePower(deps: ServerDeps, row: DeviceRow, patch: LightsPatch): Promise<Record<string, unknown>> {
+  return deps.lights.run(row.id, () => sendPower(deps, row, patch));
+}
+
+async function sendPower(deps: ServerDeps, row: DeviceRow, patch: LightsPatch): Promise<Record<string, unknown>> {
   const target = targetOf(row);
   const body: Json = { ...(patch.on === undefined ? {} : { on: patch.on }), ...(patch.bri === undefined ? {} : { bri: patch.bri }), v: true };
   if (patch.on !== true) return deviceRequest<Record<string, unknown>>(deps, target, "/json/state", { method: "POST", body });

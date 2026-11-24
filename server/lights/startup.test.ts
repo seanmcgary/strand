@@ -58,6 +58,14 @@ describe("buildStartupPreset", () => {
     expect(preset).not.toHaveProperty("bri");
   });
 
+  // Fails if a painted segment with no paint to save keeps `frz`, which would freeze it black at boot.
+  it("saves a painted segment without paint and without frz", () => {
+    const state = parseState({ on: true, bri: 128, seg: [seg(0, 0, 4, { n: "Peak paint", frz: true })] });
+    const [body] = buildStartupPreset(state, {}, 1).seg as Record<string, unknown>[];
+    expect(body).not.toHaveProperty("frz");
+    expect(body).not.toHaveProperty("i");
+  });
+
   // Fails if loading the preset at boot no longer rebuilds the same segments and paint, or if it overrides the boot power.
   it.each([
     ["one auto segment", undefined],
