@@ -165,7 +165,7 @@ WLED keeps segments only in RAM. A reboot, a power cut, or a save of LED Hardwar
 - **ID 250, name "Strand: startup".** It is an API preset: Strand writes its content directly, with `{"psave":250,"o":true,"n":"Strand: startup","bootps":250, ...content}` (`wled00/presets.cpp:218-265`). The content is the full layout: `on`, `bri`, and every listed segment with its geometry, name, colors, effect, parameters, palette, `on`, `bri`, plus `i` for painted ranges. A normal "save current state" preset is not enough, because the firmware does not save paint.
 - **`bootps: 250`** makes the controller load it at boot, with no Strand server running.
 - **When Strand writes it:** the server writes it 5 seconds after the last Lights API write to that device (layout, slot, power or paint), and 5 seconds after every scene or look apply. It keeps one timer per device in memory and restarts it on each write. Each write rewrites `/presets.json` on the controller's flash, so the 5-second wait keeps it to about one write per editing session. The firmware warns that immediate API-preset saves can corrupt `presets.json` (`presets.cpp:250`), so Strand never sends two saves less than 5 seconds apart.
-- **Another boot preset.** If `info.leds.bootps` is set to another preset the first time Strand would write, Strand asks once: "Backyard starts with your WLED preset 'Evening' at boot. Strand needs to replace it to keep your strand setup after a restart. [Replace] [Keep mine]". With "Keep mine", Strand does not write the startup preset for that device, and the Lights tab shows "Your setup will reset when the controller restarts." The choice is a preference (`startup.<deviceId>`).
+- **Another boot preset.** Strand always sets `bootps: 250`, with no question, and replaces any boot preset the user set elsewhere (owner's decision, 2026-11-24). The other preset itself is not deleted.
 - **Reading paint:** `GET /presets.json` returns the preset; the server reads the `i` arrays of the painted segments, by segment name, when it builds the Lights view. While a startup write is pending, the server uses the paint it last sent instead.
 - **The Presets tab does not list it.** The stock UI does, as "Strand: startup".
 
@@ -311,7 +311,6 @@ type StrandView = { key: string; name: string; pins: number[]; start: number; le
                     shared?: { with: string[] } };                     // segment crosses strands (6.2)
 type LightsView = { on: boolean; bri: number; strands: StrandView[];
                     segments: { used: number; max: number };
-                    startup: { enabled: boolean; otherBootPreset: { id: number; name: string } | null };
                     notices: string[] };
 ```
 
@@ -322,7 +321,6 @@ type LightsView = { on: boolean; bri: number; strands: StrandView[];
 | `PATCH /api/devices/:id/lights/strands/:key` `{ on?, bri?, ranges? }` | `LightsView`. `ranges` is the strand's full list of `RangeView` . The server compares it with the device and sends only what changed: new geometry or pattern rewrites that range's segments; a slot change patches that slot's segment by ID; a paint change sends `seg.i`. When the strand is marked `normalize`, the server rewrites the whole strand instead. |
 | `POST /api/devices/:id/lights/strands/:key/resolve` `{ action: "split" \| "combine" }` | `LightsView`. The two answers to a shared segment (6.2). |
 | `POST /api/devices/:id/lights/flash` `{ strandKey, led }` | `204`. `led` is relative to the strand (6.6). |
-| `POST /api/devices/:id/startup/consent` `{ replace: boolean }` | `204`. Records the answer to the boot-preset question. |
 | `GET /api/devices/:id/strand-groups` | `string[]` (strand keys) |
 | `PUT /api/devices/:id/strand-groups` `{ keys }` | `LightsView`. Each key must name adjacent strands of the current config. |
 | `PUT /api/devices/:id/strand-names` `{ names: Record<string, string> }` | `LightsView` |
@@ -379,6 +377,6 @@ Round-trip property, tested with generated layouts: `readLayout(apply(writeStran
 7. The on-screen strip draws the configured colors and effect names, not an exact mirror of animated pixels. The lights themselves change at once.
 8. The existing `GET /api/devices/:id/presets` endpoint is removed.
 9. "Split by strand" or "Combine strands" as the two answers to a segment that spans uncombined strands; layout edits wait for the answer.
-10. Startup preset details: ID 250, the 5-second write delay, and the one-time question when another boot preset is set.
+10. Startup preset details: ID 250 and the 5-second write delay.
 11. Strand sends paint again when it turns a device or strand on.
 12. The state pass-through narrows to `{ on, bri }`.
