@@ -1,0 +1,16 @@
+# recompose declares a React 16 peer range, but the app runs it under React 19
+# through src/lib/reactCompat.ts. With auto-installed peers, pnpm would put
+# React 16 next to React 19. Keep stale peer ranges unsatisfied.
+autoInstallPeers: false
+
+# pnpm 10 blocks a dependency's install scripts by default and only warns.
+# strictDepBuilds turns that warning into a failure, so a new dependency that
+# genuinely needs a build cannot produce a green install and a broken image.
+strictDepBuilds: true
+
+allowBuilds:
+  esbuild: true
+  fsevents: true
+
+ignoredBuiltDependencies:
+  - core-js

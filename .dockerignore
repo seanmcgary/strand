@@ -1,0 +1,9 @@
+node_modules
+dist
+dist-server
+data
+.tmp-data
+.git
+docs
+*.db
+.DS_Store
