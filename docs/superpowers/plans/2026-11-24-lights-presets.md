@@ -44,7 +44,7 @@ Binding rules this change can touch:
 
 | Field         | Value                                                              |
 |---------------|--------------------------------------------------------------------|
-| stage         | 3 (implementation)                                                 |
+| stage         | 5 (PR feedback loop)                                               |
 | class         | large (new schema, new public API, new screens, in-memory timers)  |
 | profile       | frontend + backend + seam                                          |
 | branch        | feat/app-server                                                    |
@@ -52,7 +52,18 @@ Binding rules this change can touch:
 | design assets | docs/design/strand-wled-spec.html                                  |
 | gate          | approved 2026-11-24                                                |
 | round         | 0                                                                  |
-| decisions     | 0                                                                  |
+| decisions     | 8 (see Decisions below)                                            |
+
+### Decisions
+
+1. Task 7: the plan said the power-on paint goes in the same request as `on: true`. Strand sends it in chunks of 256 runs, and the first chunk carries `on`/`bri`. One body with every paint run can exceed the device's JSON buffer (ESP8266 10240 bytes).
+2. Task 7: the plan did not say what happens when the startup preset is too large. Strand first saves it without paint, with the notice "Painted colors won't survive a restart: there are too many painted LEDs to save on this controller." If it is still too large, Strand skips the save and shows the notice "Your setup is too large to keep after a restart." The check uses the parsed size against the device's JSON buffer (server/wled/jsonLimits.ts), not the text bytes.
+3. Task 7 and stage 4: every device write goes through one per-device queue (`runtime.run`), and layout writes read the device and plan inside it. Without the queue, a startup save could revert a concurrent write, and two strands edited at once could take the same new segment ID.
+4. Task 10: paint memory is keyed by `paintKey(start, name)`, not by segment name. Range names repeat across strands (for example after a separate).
+5. Task 5: `validateRanges` accepts an effect or palette ID that is not in the device lists when it equals the value the device already has for that slot. An unknown ID read back from the device must not block edits.
+6. Task 8: `PATCH /api/devices/:id/state` takes only `{ on?, bri? }`. The browser never sends WLED JSON (CLAUDE.md architecture constraints).
+7. Task 21 and stage 4: the paint strip has `min(len, 48)` cells below 900 px and `min(len, 120)` at 900 px and above, as the design does (design `S.desktop ? 120 : 48`). The plan said `min(len, 96)`.
+8. Task 23: the seam test checks for at least one `psave` with `bootps` 250, not exactly one. The 50 ms test timer can fire between two UI steps on a slow runner.
 
 ## Plan decisions
 
