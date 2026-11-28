@@ -199,6 +199,15 @@ it("shows the offline banner, and Retry loads the lights once the device answers
   expect(screen.queryByText("Backyard is offline")).toBeNull()
 })
 
+// Fails if the offline banner stops showing how long ago the device was last seen, or the address it was seen at.
+it("shows when an offline device was last seen", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] })
+  vi.setSystemTime(new Date("2026-11-24T10:05:00.000Z"))
+  devices = [{ ...backyard, online: false }]
+  await open("/devices/d1")
+  expect(screen.getByText("Backyard is offline").parentElement!.textContent).toContain("Last seen 5\u00A0min\u00A0ago at 192.168.1.40.")
+})
+
 // Fails if `info.live` does not show the live-data banner.
 it("shows the live-data banner", async () => {
   override = (method, path) => (method === "GET" && path === "/api/devices/d1/info" ? { status: 200, body: info({ live: true }) } : undefined)
@@ -252,7 +261,6 @@ describe("seam", () => {
   type Seg = { n?: string; start: number; stop: number; grp?: number; spc?: number; frz?: boolean }
   const segs = () => fake.state.seg as Seg[]
   const o0 = () => segs().filter((s) => s.stop <= 150).map((s) => s.n)
-  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
   const click = async (el: HTMLElement) => {
     fireEvent.click(el)
     await flush()
@@ -307,7 +315,6 @@ describe("seam", () => {
     await settle(() => expect(o0().sort()).toEqual(["Range 1 1/2", "Range 1 2/2", "Range 2"]))
     for (const s of segs().filter((x) => x.n?.startsWith("Range 1 "))) expect([s.grp, s.spc]).toEqual([1, 1])
 
-    await sleep(200)
     // A slow step can let the 50 ms timer fire between two writes, so the count is not pinned.
     await settle(() => expect(psaves(fake).length).toBeGreaterThan(0))
     expect((psaves(fake).at(-1)!.body as { bootps?: number }).bootps).toBe(250)

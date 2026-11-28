@@ -96,3 +96,14 @@ it("locks Rename on a shared strand", () => {
   fireEvent.click(item)
   expect(screen.queryByRole("dialog")).toBeNull()
 })
+
+// Fails if Flash end sends the range's first LED, or one past its last.
+it("flashes the first and the last LED of a range", () => {
+  const a = renderTab(view([strand("o0", "Strand 1", 120, [allRange("Patio", 0, 60), allRange("Kitchen", 60, 60)])]))
+  fireEvent.click(screen.getAllByRole("button", { name: "Flash the first LED of Kitchen" })[0]!)
+  fireEvent.click(screen.getAllByRole("button", { name: "Flash the last LED of Patio" })[0]!)
+  expect(vi.mocked(a.flashLed).mock.calls.map((c) => c[0])).toEqual([
+    { id: "d1", key: "o0", led: 60 },
+    { id: "d1", key: "o0", led: 59 },
+  ])
+})

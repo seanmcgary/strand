@@ -204,6 +204,22 @@ describe("strand writes", () => {
     expect(lights().view!.segments.used).toBe(3)
   })
 
+  // Fails if a failed write rolls back strands other than its own.
+  it("rolls back only the strand whose write failed", async () => {
+    const { store, lights, getLights } = await setup()
+    const o1Call = deferred<LightsView>()
+    const o0Call = deferred<LightsView>()
+    vi.spyOn(api, "patchStrand").mockReturnValueOnce(o1Call.promise).mockReturnValueOnce(o0Call.promise)
+    getLights.mockRejectedValue(new ApiError(504, "device_offline", "m"))
+
+    store.dispatch(editStrand({ id: "d1", key: "o1", patch: { bri: 20 } }))
+    store.dispatch(editStrand({ id: "d1", key: "o0", patch: { bri: 30 } }))
+    o0Call.reject(new ApiError(504, "device_offline", "m"))
+    await flush()
+
+    expect(lights().view!.strands.map((st) => st.bri)).toEqual([128, 20])
+  })
+
   // Fails if a failed write during a paint stroke ends the hold, so the quiet re-read replaces the strand mid-stroke.
   it("keeps a paint stroke's hold through a failed write", async () => {
     const { store, lights, getLights } = await setup()
