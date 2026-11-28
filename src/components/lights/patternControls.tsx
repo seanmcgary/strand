@@ -2,9 +2,8 @@ import type { Effect, Palette, Pattern, RangeView } from "../../../shared/apiTyp
 import { Button } from "@/components/ui/button"
 import { Stepper } from "@/components/ui/stepper"
 import { everyPreview, kindReason, LOCKED, stepReasons, withPattern } from "@/lights/model"
+import { LABEL, PRESSED } from "@/lib/dialogStyles"
 
-const LABEL = "text-sm font-medium leading-none"
-const PRESSED = "hover:bg-muted hover:text-foreground aria-pressed:border-primary aria-pressed:bg-primary/15 aria-pressed:font-semibold aria-pressed:text-foreground"
 
 const KINDS: [Pattern["kind"], string][] = [
   ["all", "All"],

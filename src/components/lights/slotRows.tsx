@@ -1,9 +1,8 @@
 import type { Effect, Palette, RangeView, SlotView } from "../../../shared/apiTypes"
 import { Icon } from "@/components/ui/icon"
 import { slotBackground, slotRowId, slotText } from "@/lights/model"
+import { LABEL } from "@/lib/dialogStyles"
 import { cn } from "@/lib/utils"
-
-const LABEL = "text-sm font-medium leading-none"
 
 /** A round color swatch for a slot: its first color, or its palette. */
 export function Swatch({ fxs, pals, slot, className }: { fxs: Effect[] | null; pals: Palette[] | null; slot: SlotView; className?: string }) {

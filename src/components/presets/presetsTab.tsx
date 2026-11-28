@@ -8,12 +8,12 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Icon } from "@/components/ui/icon"
 import { Skeleton } from "@/components/ui/skeleton"
 import { applyLookId, applySceneId, hexOf, patternText, presetMenuId, SAVE_LOOK_ID, SAVE_SCENE_ID } from "@/lights/model"
+import { CARD } from "@/lib/dialogStyles"
 import { cn } from "@/lib/utils"
 import type { ThunkError } from "@/store/createApiThunk"
 import type { DeviceLights } from "@/store/slices/lights"
 import type { DevicePresets } from "@/store/slices/presets"
 
-const CARD = "rounded-lg border bg-card text-card-foreground"
 const PANEL_CENTER = "flex flex-col items-center gap-3 px-6 py-14 text-center"
 const ROW = "flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3"
 const NO_STRANDS = "There are no strands on this device."

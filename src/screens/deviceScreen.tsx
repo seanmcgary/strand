@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button"
 import { Icon } from "@/components/ui/icon"
 import type { IconName } from "@/components/ui/iconPaths"
 import { Skeleton } from "@/components/ui/skeleton"
+import { CARD } from "@/lib/dialogStyles"
 import { cn } from "@/lib/utils"
 import { withActions } from "@/lib/withActions"
 import { withRouter, type RouterProps } from "@/lib/withRouter"
@@ -77,7 +78,6 @@ const TABS: { id: Tab; icon: IconName; label: string }[] = [
 const TABS_LIST = "grid h-10 w-full grid-cols-3 items-center justify-center rounded-lg bg-muted p-1 text-muted-foreground sm:inline-flex sm:w-auto"
 const TABS_TRIGGER =
   "inline-flex h-8 items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-3 text-sm font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 aria-selected:bg-background aria-selected:text-foreground aria-selected:shadow [&_svg]:hidden sm:[&_svg]:block"
-const CARD = "rounded-lg border bg-card text-card-foreground"
 const OUTLINE_LINK =
   "inline-flex h-10 items-center justify-center gap-2 whitespace-nowrap rounded-md border border-input bg-transparent px-4 py-2 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
 

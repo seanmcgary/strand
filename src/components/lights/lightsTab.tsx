@@ -3,20 +3,20 @@ import type { Device, RangeView, StrandPatch, StrandView } from "../../../shared
 import { LightsDialogs, type LightsDialog } from "@/components/lights/lightsDialogs"
 import { PaintEditor } from "@/components/lights/paintEditor"
 import { RangeCard } from "@/components/lights/rangeCard"
-import { SlotSheet } from "@/components/lights/slotSheet"
+import { SlotSheet, type SlotSheetTarget } from "@/components/lights/slotSheet"
 import { StrandPanel } from "@/components/lights/strandPanel"
 import { StrandPicker } from "@/components/lights/strandPicker"
 import { Button } from "@/components/ui/button"
 import { Icon } from "@/components/ui/icon"
 import { Skeleton } from "@/components/ui/skeleton"
 import { freeSegs, handleId, mergeInto, nextRangeName, rangeHeaderId, slotRowId, splitRange } from "@/lights/model"
+import { CARD } from "@/lib/dialogStyles"
 import { cn, wledSettingsUrl } from "@/lib/utils"
 import type { ThunkError } from "@/store/createApiThunk"
 import type { DeviceLights } from "@/store/slices/lights"
 import type { PreferencesState } from "@/store/slices/preferences"
 import type { ToastKind } from "@/store/slices/toasts"
 
-const CARD = "rounded-lg border bg-card text-card-foreground"
 const PANEL_CENTER = "flex flex-col items-center gap-3 px-6 py-14 text-center"
 const BANNER = "flex flex-wrap items-center gap-3 rounded-lg border p-3"
 const LINK_BUTTON =
@@ -44,9 +44,6 @@ export interface LightsActions {
   endPaint: (a: { id: string; key: string }) => unknown
 }
 
-/** The slot the slot sheet edits. */
-type SlotTarget = { key: string; r: number; s: number }
-
 export interface LightsTabProps {
   device: Device
   /** Offline or rebooting: the tab shows the offline panel. */
@@ -59,8 +56,8 @@ export interface LightsTabProps {
 }
 
 interface LocalProps {
-  slotTarget: SlotTarget | null
-  setSlotTarget: (t: SlotTarget | null) => void
+  slotTarget: SlotSheetTarget | null
+  setSlotSheetTarget: (t: SlotSheetTarget | null) => void
   dialog: LightsDialog | null
   setDialog: (d: LightsDialog | null) => void
   /** The paint brush, shared by the Individual ranges. */
@@ -284,7 +281,7 @@ const groupsWithout = (p: BaseProps, drop: string[], add: string[]): string[] =>
 ]
 
 export const LightsTab = compose<Props, LightsTabProps>(
-  withState("slotTarget", "setSlotTarget", null),
+  withState("slotTarget", "setSlotSheetTarget", null),
   withState("dialog", "setDialog", null),
   withState("brush", "setBrush", "#FF8800"),
   withHandlers<BaseProps, HandlerProps>({
@@ -357,11 +354,11 @@ export const LightsTab = compose<Props, LightsTabProps>(
       if (p.strand) edit(p, { ranges: p.strand.ranges.with(i, next) })
     },
     onOpenSlot: (p) => (i: number, s: number) => {
-      if (p.strand) p.setSlotTarget({ key: p.strand.key, r: i, s })
+      if (p.strand) p.setSlotSheetTarget({ key: p.strand.key, r: i, s })
     },
     onCloseSlot: (p) => () => {
       const t = p.slotTarget
-      p.setSlotTarget(null)
+      p.setSlotSheetTarget(null)
       // The sheet is gone once this renders; the slot's row takes the focus back.
       if (t) setTimeout(() => document.getElementById(slotRowId(t.key, t.r, t.s))?.focus())
     },

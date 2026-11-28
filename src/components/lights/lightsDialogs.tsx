@@ -9,6 +9,7 @@ import { adjacentPairs, COMBINE_BUTTON_ID, cutRanges, nameTaken, pinLabel, range
 import { FORM_DESCRIPTION, FORM_MESSAGE, INPUT, LABEL } from "@/lib/dialogStyles"
 import { cn } from "@/lib/utils"
 import type { ThunkError } from "@/store/createApiThunk"
+import type { Status } from "@/store/slices/lights"
 
 const SUBTLE_BOX = "rounded-md border bg-muted/40 p-3"
 const RADIO_ROW =
@@ -16,8 +17,6 @@ const RADIO_ROW =
 
 /** A dialog the Lights tab has open. A rename with `i` renames that range, without it the strand. */
 export type LightsDialog = { kind: "rename"; key: string; i?: number } | { kind: "separate"; key: string } | { kind: "combine" }
-
-type Status = "idle" | "loading" | "ok" | "error"
 
 export interface LightsDialogsProps {
   dialog: LightsDialog

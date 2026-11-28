@@ -20,20 +20,16 @@ import {
   rgbOf,
   type Hsv,
 } from "@/lights/model"
+import { FORM_DESCRIPTION, FORM_MESSAGE, INPUT, LABEL, PRESSED } from "@/lib/dialogStyles"
 import { cn } from "@/lib/utils"
 import type { ThunkError } from "@/store/createApiThunk"
+import type { Status } from "@/store/slices/lights"
 import type { ToastKind } from "@/store/slices/toasts"
 
-const LABEL = "text-sm font-medium leading-none"
 const HEADING = "text-sm font-semibold"
-const FORM_DESCRIPTION = "text-[13px] leading-snug text-muted-foreground"
-const FORM_MESSAGE = "text-[13px] font-medium text-danger"
-const INPUT =
-  "flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-base shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 aria-[invalid=true]:border-danger aria-[invalid=true]:focus-visible:ring-danger sm:text-sm"
 const LIST_ROW =
   "flex min-h-10 w-full min-w-0 items-center gap-2 rounded-md px-2 text-left text-sm hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring aria-pressed:bg-accent aria-pressed:font-medium"
 const GROUP_LABEL = "px-2 pb-1 pt-2 text-xs font-medium text-muted-foreground"
-const PRESSED = "hover:bg-muted hover:text-foreground aria-pressed:border-primary aria-pressed:bg-primary/15 aria-pressed:font-semibold aria-pressed:text-foreground"
 const SLIDER_KEYS = ["sx", "ix", "c1", "c2", "c3"] as const
 const CHECK_KEYS = ["o1", "o2", "o3"] as const
 type SliderKey = (typeof SLIDER_KEYS)[number]
@@ -43,8 +39,6 @@ const SHARED_KEYS = ["fx", "fxName", "sx", "ix", "c1", "c2", "c3", "o1", "o2", "
 
 /** The slot the sheet edits: range `r` of strand `key`, slot `s`. */
 export type SlotSheetTarget = { key: string; r: number; s: number }
-
-type Status = "idle" | "loading" | "ok" | "error"
 
 export interface SlotSheetProps {
   /** Null while the sheet is closed. */

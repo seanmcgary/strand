@@ -7,9 +7,9 @@ import { Icon } from "@/components/ui/icon"
 import { Slider } from "@/components/ui/slider"
 import { Switch } from "@/components/ui/switch"
 import { freeSegs, LOCKED, needMsg, pinLabel, strandMenuId } from "@/lights/model"
+import { CARD } from "@/lib/dialogStyles"
 import { cn } from "@/lib/utils"
 
-const CARD = "rounded-lg border bg-card text-card-foreground"
 
 const listText = (xs: string[]): string => (xs.length > 2 ? `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}` : xs.join(" and "))
 

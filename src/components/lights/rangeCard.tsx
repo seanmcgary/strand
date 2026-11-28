@@ -7,9 +7,9 @@ import { Button } from "@/components/ui/button"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdownMenu"
 import { Icon } from "@/components/ui/icon"
 import { LOCKED, rangeHeaderId, rangeLabel, rangeMenuId, rangeSummary } from "@/lights/model"
+import { CARD } from "@/lib/dialogStyles"
 import { cn } from "@/lib/utils"
 
-const CARD = "rounded-lg border bg-card text-card-foreground"
 const FLASH_REASON = "Flashing needs one free segment. Remove a range first."
 
 export interface RangeCardProps {

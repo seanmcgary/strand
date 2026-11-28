@@ -5,7 +5,7 @@ import { freeSegs, needMsg, segsNeeded } from "@/lights/model"
 import { createApiThunk, type ThunkError } from "../createApiThunk"
 import { toast, type ToastsState } from "./toasts"
 
-type Status = "idle" | "loading" | "ok" | "error"
+export type Status = "idle" | "loading" | "ok" | "error"
 type Field = "on" | "bri" | "ranges"
 type Edit = Partial<Pick<StrandView, Field>>
 
