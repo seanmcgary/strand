@@ -51,7 +51,7 @@ Binding rules this change can touch:
 | pr            | #1                                                                 |
 | design assets | docs/design/strand-wled-spec.html                                  |
 | gate          | approved 2026-11-24                                                |
-| round         | 0                                                                  |
+| round         | 1 (clean: no CI, no bot, no review comments)                       |
 | decisions     | 8 (see Decisions below)                                            |
 
 ### Decisions
