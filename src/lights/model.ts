@@ -309,3 +309,9 @@ export function kindReason(r: RangeView, kind: Pattern["kind"], free: number, lo
   const cost = (kind === "every" ? n : 1) - segsOf([r])
   return cost > free ? needMsg(cost, free) : ""
 }
+
+export const SAVE_SCENE_ID = "openSaveScene-btn"
+export const SAVE_LOOK_ID = "openSaveLook-btn"
+export const applyLookId = (id: string): string => `applylook-${id}`
+export const applySceneId = (id: string): string => `applyscene-${id}`
+export const presetMenuId = (preset: "scene" | "look", id: string): string => `${preset}-${id}-btn`

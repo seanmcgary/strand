@@ -151,7 +151,8 @@ it("loads the lights when the Lights tab opens and again on return", async () =>
   await flush()
   fireEvent.click(tab("Lights"))
   await flush()
-  expect(count("GET", "/api/devices/d1/lights")).toBe(2)
+  // One read each time a tab that shows the strands opens: Lights, Presets, Lights.
+  expect(count("GET", "/api/devices/d1/lights")).toBe(3)
   expect(count("GET", "/api/preferences")).toBe(1)
 })
 

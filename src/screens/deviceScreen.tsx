@@ -11,6 +11,7 @@ import { DeviceBanners } from "@/components/device/deviceBanners"
 import { DeviceHeader } from "@/components/device/deviceHeader"
 import { SettingsPanel } from "@/components/device/settingsPanel"
 import { LightsTab } from "@/components/lights/lightsTab"
+import { PresetsTab } from "@/components/presets/presetsTab"
 import { Button } from "@/components/ui/button"
 import { Icon } from "@/components/ui/icon"
 import type { IconName } from "@/components/ui/iconPaths"
@@ -50,6 +51,19 @@ import {
   type DeviceLights,
 } from "@/store/slices/lights"
 import { loadPreferences, pushRecentColor, toggleFavoriteEffect, type PreferencesState } from "@/store/slices/preferences"
+import {
+  applyLook,
+  applyScene,
+  createLook,
+  createScene,
+  deleteLook,
+  deleteScene,
+  loadPresets,
+  renameLook,
+  renameScene,
+  selectPresets,
+  type DevicePresets,
+} from "@/store/slices/presets"
 import { toast, type ToastItem } from "@/store/slices/toasts"
 
 type Tab = "lights" | "presets" | "settings"
@@ -94,6 +108,7 @@ interface StateProps {
   entry: DevicePageEntry
   prefs: PreferencesState
   lights: DeviceLights
+  presets: DevicePresets
   strand: StrandView | null
   toasts: ToastItem[]
 }
@@ -122,6 +137,15 @@ const actions = {
   setStrandGroups,
   setStrandName,
   loadOutputs,
+  loadPresets,
+  createScene,
+  renameScene,
+  deleteScene,
+  applyScene,
+  createLook,
+  renameLook,
+  deleteLook,
+  applyLook,
   toast,
 }
 /** What dispatching each action returns: a thunk's own result, else the action. */
@@ -170,6 +194,9 @@ function syncLoads(p: Props, prev: Props | null) {
     p.loadFxLists(p.id)
     if (!p.prefs.loaded) p.loadPreferences()
   }
+  const presetsOpen = online && tabOf(p.location) === "presets"
+  const presetsWereOpen = wasOnline && !!prev && tabOf(prev.location) === "presets"
+  if (presetsOpen && !presetsWereOpen) p.loadPresets(p.id)
 }
 
 export function DeviceScreenView(props: Props) {
@@ -247,6 +274,9 @@ export function DeviceScreenView(props: Props) {
             {tab === t.id && t.id === "lights" ? (
               <LightsTab device={device} offline={!isOnline(props)} lights={props.lights} strand={props.strand} prefs={props.prefs} actions={props} />
             ) : null}
+            {tab === t.id && t.id === "presets" ? (
+              <PresetsTab device={device} offline={!isOnline(props)} lights={props.lights} presets={props.presets} strand={props.strand} actions={props} />
+            ) : null}
             {tab === t.id && t.id === "settings" ? <SettingsPanel device={device} /> : null}
           </div>
         ))}
@@ -271,6 +301,7 @@ const mapState = (state: RootState, own: RouterProps): StateProps => {
     entry: selectDevicePage(state, id),
     prefs: state.preferences,
     lights: selectLights(state, id),
+    presets: selectPresets(state, id),
     strand: selectedStrand(state, id),
     toasts: state.toasts.items,
   }

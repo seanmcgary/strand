@@ -3,6 +3,7 @@ import { devicePageSlice } from "./slices/devicePage"
 import { devicesSlice } from "./slices/devices"
 import { lightsSlice } from "./slices/lights"
 import { preferencesSlice } from "./slices/preferences"
+import { presetsSlice } from "./slices/presets"
 import { toastsSlice } from "./slices/toasts"
 
 /**
@@ -19,6 +20,7 @@ export const reducers = {
   devices: devicesSlice.reducer,
   lights: lightsSlice.reducer,
   preferences: preferencesSlice.reducer,
+  presets: presetsSlice.reducer,
   toasts: toastsSlice.reducer,
 }
 

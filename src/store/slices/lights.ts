@@ -291,7 +291,7 @@ export const selectedStrand = (state: { lights: LightsState }, id: string): Stra
 }
 
 /** A failed lights write: toast, then re-read the view quietly (the device may hold part of the write). */
-const lightsError =
+export const lightsError =
   (id: string, e: ThunkError | undefined): Thunk<void> =>
   (dispatch) => {
     dispatch(toast("error", "Couldn't change the lights", e?.message ?? ""))
