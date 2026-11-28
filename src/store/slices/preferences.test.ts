@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest"
-import { api } from "@/api/client"
+import { api, ApiError } from "@/api/client"
 import { makeStore } from "../index"
+import { toastsSlice } from "./toasts"
 import { loadPreferences, preferencesSlice, pushRecentColor, toggleFavoriteEffect } from "./preferences"
 
 afterEach(() => vi.restoreAllMocks())
@@ -9,7 +10,7 @@ afterEach(() => vi.restoreAllMocks())
 it("keeps the 8 newest recent colors and saves them", async () => {
   const put = vi.spyOn(api, "putPreference").mockResolvedValue(undefined)
   vi.spyOn(api, "getPreferences").mockResolvedValue({})
-  const store = makeStore({ preferences: preferencesSlice.reducer })
+  const store = makeStore({ preferences: preferencesSlice.reducer, toasts: toastsSlice.reducer })
   await store.dispatch(loadPreferences())
   const colors = ["#000001", "#000002", "#000003", "#000004", "#000005", "#000006", "#000007", "#000008", "#000009", "#000005"]
 
@@ -26,9 +27,21 @@ it.each([
   ["toggleFavoriteEffect", toggleFavoriteEffect("Solid")],
 ] as const)("%s does not save before the preferences load", async (_, thunk) => {
   const put = vi.spyOn(api, "putPreference").mockResolvedValue(undefined)
-  const store = makeStore({ preferences: preferencesSlice.reducer })
+  const store = makeStore({ preferences: preferencesSlice.reducer, toasts: toastsSlice.reducer })
 
   await store.dispatch(thunk)
 
   expect(put).not.toHaveBeenCalled()
+})
+
+// Fails if a failed preference save is dropped without telling the user.
+it("toasts when a favorite fails to save", async () => {
+  vi.spyOn(api, "putPreference").mockRejectedValue(new ApiError(504, "device_offline", "m"))
+  vi.spyOn(api, "getPreferences").mockResolvedValue({})
+  const store = makeStore({ preferences: preferencesSlice.reducer, toasts: toastsSlice.reducer })
+  await store.dispatch(loadPreferences())
+
+  await store.dispatch(toggleFavoriteEffect("Solid"))
+
+  expect(store.getState().toasts.items.map((t) => t.title)).toEqual(["Couldn't save your preferences"])
 })

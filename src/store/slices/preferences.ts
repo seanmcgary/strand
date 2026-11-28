@@ -1,6 +1,7 @@
 import { createSlice, type PayloadAction, type ThunkDispatch, type UnknownAction } from "@reduxjs/toolkit"
 import { api } from "@/api/client"
 import { createApiThunk } from "../createApiThunk"
+import { toast, type ToastsState } from "./toasts"
 
 export interface PreferencesState {
   recentColors: string[]
@@ -42,20 +43,26 @@ export const preferencesSlice = createSlice({
   },
 })
 
-type PrefsRoot = { preferences: PreferencesState }
+type PrefsRoot = { preferences: PreferencesState; toasts: ToastsState }
 type PrefsDispatch = ThunkDispatch<PrefsRoot, unknown, UnknownAction>
 
-/** Puts `hex` first in the recent colors (unique, at most 8) and saves the list. A failed save keeps the local list; nothing is saved until the stored lists load, so they are not overwritten. */
-export const pushRecentColor = (hex: string) => (dispatch: PrefsDispatch, getState: () => PrefsRoot) => {
+/** Saves a list and toasts when the server refuses it, so the star or color the user sees is not silently lost. */
+async function save(dispatch: PrefsDispatch, key: string, value: string[]) {
+  const res = await dispatch(savePreference({ key, value }))
+  if (savePreference.rejected.match(res)) dispatch(toast("error", "Couldn't save your preferences", res.payload?.message ?? ""))
+}
+
+/** Puts `hex` first in the recent colors (unique, at most 8) and saves the list. A failed save keeps the local list and toasts; nothing is saved until the stored lists load, so they are not overwritten. */
+export const pushRecentColor = (hex: string) => async (dispatch: PrefsDispatch, getState: () => PrefsRoot) => {
   const next = [hex, ...getState().preferences.recentColors.filter((c) => c !== hex)].slice(0, MAX_RECENT)
   dispatch(preferencesSlice.actions.recentColorsSet(next))
-  if (getState().preferences.loaded) return dispatch(savePreference({ key: RECENT_KEY, value: next }))
+  if (getState().preferences.loaded) await save(dispatch, RECENT_KEY, next)
 }
 
 /** Adds the effect to the favorites, or removes it, and saves the list. */
-export const toggleFavoriteEffect = (name: string) => (dispatch: PrefsDispatch, getState: () => PrefsRoot) => {
+export const toggleFavoriteEffect = (name: string) => async (dispatch: PrefsDispatch, getState: () => PrefsRoot) => {
   const f = getState().preferences.favoriteEffects
   const next = f.includes(name) ? f.filter((x) => x !== name) : [...f, name]
   dispatch(preferencesSlice.actions.favoriteEffectsSet(next))
-  if (getState().preferences.loaded) return dispatch(savePreference({ key: FAVORITES_KEY, value: next }))
+  if (getState().preferences.loaded) await save(dispatch, FAVORITES_KEY, next)
 }
