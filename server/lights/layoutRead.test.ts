@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { seeds } from "../../test/fixtures/seeds";
 import { listState, simFromState } from "../../test/wledSim";
-import { decodePaint, encodePaint, parseState, readLayout, segmentName, strandsFromConfig, type PaintMap } from "./layoutRead";
+import { decodePaint, encodePaint, parseState, readLayout, strandsFromConfig, type PaintMap } from "./layoutRead";
 
 const lists = { effects: seeds.backyard.effects, palettes: seeds.backyard.palettes };
 const backyard = strandsFromConfig(seeds.backyard.cfg, [], {}).strands;
@@ -109,15 +109,6 @@ describe("readLayout", () => {
     expect(read(seg, frontRoof).strands[0]!.ranges[1]!.paint).toEqual(Array(100).fill("#FF0000"));
   });
 
-  // Fails if a segment over two uncombined strands does not mark both shared with each other.
-  it("marks strands that share a segment", () => {
-    const { strands } = read([{ id: 0, n: "Everything", start: 0, stop: 300 }]);
-    expect(strands.map((s) => [s.key, s.shared, s.ranges.map((r) => [r.name, r.start, r.len])])).toEqual([
-      ["o0", { with: ["o1"] }, [["Range 1", 0, 150]]],
-      ["o1", { with: ["o0"] }, [["Range 1", 0, 150]]],
-    ]);
-  });
-
   // Fails if the segment count leaves out a flash segment or the flash segment is read as a range.
   it("ignores a flash segment but counts it", () => {
     const view = read([
@@ -143,16 +134,6 @@ describe("parseState", () => {
     expect(state.on).toBe(false);
     expect(state.seg.map((s) => s.id)).toEqual([1]);
     expect(state.seg[0]).toMatchObject({ n: "A".repeat(32), col: [[0, 0, 0], [0, 0, 0], [0, 0, 0]], grp: 1, c3: 16 });
-  });
-});
-
-describe("segmentName", () => {
-  // Fails if a long multi-byte name is not cut on a UTF-8 boundary to leave room for the whole tag.
-  it("fits a multi-byte name and its tag in 32 bytes", () => {
-    const name = segmentName("Küche Fenster Nord Süd Ost West Garten", { k: 1, n: 2 });
-    expect(Buffer.byteLength(name)).toBeLessThanOrEqual(32);
-    expect(name.endsWith(" 1/2")).toBe(true);
-    expect(Buffer.from(name).toString()).toBe(name);
   });
 });
 

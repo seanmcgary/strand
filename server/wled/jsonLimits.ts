@@ -17,11 +17,11 @@ const MAX_TEXT_BYTES = 16384;
 const SLOT_BYTES = 16;
 const MARGIN = 0.9;
 
-export type JsonCost = { bytes: number; slots: number };
-export type JsonLimits = { bytes: number; slots: number };
+type JsonCost = { bytes: number; slots: number };
+type JsonLimits = { bytes: number; slots: number };
 
 /** `JSON_BUFFER_SIZE` for an `info.arch` ("esp8266", "esp32", or a chip model such as "ESP32-S2", `json.cpp:853-871`). An unknown arch gets the smallest. */
-export function jsonBufferSize(arch: unknown): number {
+function jsonBufferSize(arch: unknown): number {
   const a = typeof arch === "string" ? arch.toLowerCase() : "";
   if (a === "esp32-s2") return 24576;
   if (a.startsWith("esp32")) return 32767;
@@ -29,7 +29,7 @@ export function jsonBufferSize(arch: unknown): number {
 }
 
 /** The most text bytes and value slots one request may have on a device of this arch. */
-export function jsonLimits(arch: unknown): JsonLimits {
+function jsonLimits(arch: unknown): JsonLimits {
   return { bytes: MAX_TEXT_BYTES - 1, slots: Math.floor((jsonBufferSize(arch) * MARGIN) / SLOT_BYTES) };
 }
 
@@ -40,11 +40,11 @@ function slots(v: unknown): number {
 }
 
 /** The text bytes and value slots of a request body. */
-export function jsonCost(body: unknown): JsonCost {
+function jsonCost(body: unknown): JsonCost {
   return { bytes: Buffer.byteLength(JSON.stringify(body)), slots: slots(body) };
 }
 
-export const fits = (cost: JsonCost, limits: JsonLimits): boolean => cost.bytes <= limits.bytes && cost.slots <= limits.slots;
+const fits = (cost: JsonCost, limits: JsonLimits): boolean => cost.bytes <= limits.bytes && cost.slots <= limits.slots;
 
 /** Whether a device of this arch accepts the body. */
 export function fitsDevice(body: unknown, arch: unknown): boolean {

@@ -27,12 +27,6 @@ export type FakeOpts = {
   infoOverride?: object;
   /** Listen on this port instead of a free one. */
   port?: number;
-  /**
-   * The size in bytes of the device's JSON document (`JSON_BUFFER_SIZE`, const.h:656-664). Defaults to the
-   * seed arch's: 10240 on ESP8266, 24576 on ESP32-S2, 32767 on other ESP32. A POST body whose parsed values
-   * need more (16 bytes each) gets 400; a body of 16384 bytes or more gets 413 (AsyncJson-v6.h:118, :144, :154).
-   */
-  maxBody?: number;
 };
 
 export type FakeWled = {
@@ -76,7 +70,7 @@ export async function startFakeWled(seed: Seed, opts: FakeOpts = {}): Promise<Fa
   const def = cfg.def as { on: boolean; bri: number; ps: number };
   const sim = simFromState(seed.state as Parameters<typeof simFromState>[0], seed.info.leds.maxseg, seed.info.leds.count);
   sim.presets = clone(seed.presets);
-  const maxBody = opts.maxBody ?? docSize(seed.info.arch);
+  const maxBody = docSize(seed.info.arch);
   let afterPostFns: (() => void)[] = [];
   const requests: FakeWled["requests"] = [];
   let mode: FakeMode = "ok";

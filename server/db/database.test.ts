@@ -20,10 +20,10 @@ describe("openDb", () => {
     for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  // Fails if openDb skips the migrations, does not record the version, or migration 2 (scenes, looks, strand groups) is missing.
+  // Fails if openDb skips the migrations or does not record the version.
   it("migrates a new database to the latest version", () => {
     const db = openDb(":memory:");
-    expect(userVersion(db)).toBe(2);
+    expect(userVersion(db)).toBe(migrations.length);
     db.close();
   });
 

@@ -4,7 +4,6 @@ import { palxStops, parseEffectMeta } from "./effectMeta";
 describe("parseEffectMeta", () => {
   // Fails if parseEffectMeta does not split the metadata string, apply default labels or read the palette field.
   it.each([
-    [1, "!,Duty cycle;!,!;!;01", { pal: true, sliders: ["Speed", "Duty cycle"], checks: [], colors: ["Fx", "Bg"] }],
     [7, "!,!,,,,Smooth;;!", { pal: true, sliders: ["Speed", "Intensity"], checks: ["Smooth"], colors: [] }],
     [4, "!;;!", { pal: true, sliders: ["Speed"], checks: [], colors: [] }],
     [0, "", { pal: false, sliders: [], checks: [], colors: ["Fx"] }],

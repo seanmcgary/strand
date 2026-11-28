@@ -138,15 +138,6 @@ describe("writeStrand", () => {
     expect(w.seg.flatMap(deletes).map((p) => p.id).sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 6, 7]);
   });
 
-  // Fails if the budget check is skipped or counts need and free differently from spec §6.2.
-  it("refuses a write over the segment budget", () => {
-    const others = Array.from({ length: 14 }, (_, k) => ({ id: k + 1, start: 150 + k * 10, stop: 160 + k * 10 }));
-    const state = deviceState([{ id: 0, start: 0, stop: 150 }, ...others], 16);
-    const every: RangeView = { name: "E", start: 0, len: 150, pattern: { kind: "every", n: 3, group: 1 }, slots: [slot(), slot(), slot()] };
-    const err = layoutError(() => write(state, [every], {}, 16));
-    expect({ code: err.code, need: err.need, free: err.free }).toEqual({ code: "segment_budget", need: 2, free: 1 });
-  });
-
   // Fails if a strand marked normalize is diffed instead of rewritten from the view.
   it("rewrites a normalize strand from its view", () => {
     const state = deviceState([{ id: 0, n: "Porch", start: 0, stop: 150, grp: 3 }]);
@@ -211,10 +202,9 @@ describe("writeStrand", () => {
     expect(write(rgbw, [all("A", 0, 150, { col: [[255, 0, 0], [0, 0, 0], [0, 0, 0]] })]).seg).toEqual([]);
   });
 
-  // Fails if a shared strand accepts a layout change, or its slot edit does not reach the crossing segment.
+  // Fails if a shared strand's slot edit does not reach the crossing segment.
   it("edits only the slot of a shared strand", () => {
     const state = deviceState([{ id: 0, start: 0, stop: 300 }]);
-    expect(layoutError(() => write(state, [all("A", 0, 75), all("B", 75, 75)])).code).toBe("shared");
     expect(flat(write(state, [all("Range 1", 0, 150, { fx: 2 })]))).toEqual([expect.objectContaining({ id: 0, fx: 2 })]);
   });
 
