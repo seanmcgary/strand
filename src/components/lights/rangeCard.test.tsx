@@ -34,6 +34,9 @@ function renderTab(v: LightsView) {
     loadFxLists: vi.fn(),
     pushRecentColor: vi.fn(),
     toggleFavoriteEffect: vi.fn(),
+    beginPaint: vi.fn(),
+    paintCells: vi.fn(),
+    endPaint: vi.fn(),
   }
   render(<LightsTab device={device} offline={false} lights={lights(v)} strand={v.strands[0] ?? null} prefs={prefs} actions={actions} />)
   return actions

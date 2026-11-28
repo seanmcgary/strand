@@ -1,6 +1,7 @@
 import { compose, withHandlers, withState } from "recompose"
 import type { Device, RangeView, StrandPatch, StrandView } from "../../../shared/apiTypes"
 import { LightsDialogs, type LightsDialog } from "@/components/lights/lightsDialogs"
+import { PaintEditor } from "@/components/lights/paintEditor"
 import { RangeCard } from "@/components/lights/rangeCard"
 import { SlotSheet } from "@/components/lights/slotSheet"
 import { StrandPanel } from "@/components/lights/strandPanel"
@@ -38,6 +39,9 @@ export interface LightsActions {
   loadFxLists: (id: string) => unknown
   pushRecentColor: (hex: string) => unknown
   toggleFavoriteEffect: (name: string) => unknown
+  beginPaint: (a: { id: string; key: string }) => unknown
+  paintCells: (a: { id: string; key: string; i: number; from: number; to: number; color: string }) => unknown
+  endPaint: (a: { id: string; key: string }) => unknown
 }
 
 /** The slot the slot sheet edits. */
@@ -59,6 +63,9 @@ interface LocalProps {
   setSlotTarget: (t: SlotTarget | null) => void
   dialog: LightsDialog | null
   setDialog: (d: LightsDialog | null) => void
+  /** The paint brush, shared by the Individual ranges. */
+  brush: string
+  setBrush: (hex: string) => void
 }
 
 interface HandlerProps {
@@ -204,6 +211,17 @@ function LightsTabView(props: Props) {
                   onDelete={props.onDeleteRange}
                   onRange={props.onRange}
                   onOpenSlot={(s) => props.onOpenSlot(i, s)}
+                  paintEditor={
+                    <PaintEditor
+                      id={device.id}
+                      strand={st}
+                      i={i}
+                      brush={props.brush}
+                      recentColors={props.prefs.recentColors}
+                      onBrush={props.setBrush}
+                      actions={props.actions}
+                    />
+                  }
                 />
               ))}
             </ul>
@@ -268,6 +286,7 @@ const groupsWithout = (p: BaseProps, drop: string[], add: string[]): string[] =>
 export const LightsTab = compose<Props, LightsTabProps>(
   withState("slotTarget", "setSlotTarget", null),
   withState("dialog", "setDialog", null),
+  withState("brush", "setBrush", "#FF8800"),
   withHandlers<BaseProps, HandlerProps>({
     onRetry: (p) => () => {
       p.actions.loadLights(p.device.id)

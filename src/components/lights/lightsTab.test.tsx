@@ -2,7 +2,7 @@
 import "@/lib/reactCompat"
 import { afterEach, expect, it, vi } from "vitest"
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
-import type { LightsView } from "../../../shared/apiTypes"
+import type { LightsView, RangeView } from "../../../shared/apiTypes"
 import { allRange, device, lights, strand, view } from "../../../test/lightsView"
 import { LightsTab, type LightsActions } from "./lightsTab"
 
@@ -25,6 +25,9 @@ function renderTab(v: LightsView) {
     loadFxLists: vi.fn(),
     pushRecentColor: vi.fn(),
     toggleFavoriteEffect: vi.fn(),
+    beginPaint: vi.fn(),
+    paintCells: vi.fn(),
+    endPaint: vi.fn(),
   }
   render(<LightsTab device={device} offline={false} lights={lights(v)} strand={v.strands[0] ?? null} prefs={prefs} actions={actions} />)
   return actions
@@ -81,4 +84,11 @@ it("opens the slot sheet from a slot row and returns focus on Escape", async () 
   fireEvent.keyDown(dialog, { key: "Escape" })
   expect(screen.queryByRole("dialog")).toBeNull()
   await waitFor(() => expect(document.activeElement).toBe(row))
+})
+
+// Fails if LightsTab stops passing the paint editor to the RangeCard of an Individual range.
+it("shows the paint editor for an Individual range", () => {
+  const painted: RangeView = { ...allRange("Peak", 0, 10), pattern: { kind: "individual" }, paint: Array(10).fill("#000000") }
+  renderTab(view([strand("o0", "Strand 1", 10, [painted])]))
+  expect(screen.getByRole("slider", { name: "Paint Peak" })).toBeTruthy()
 })

@@ -32,6 +32,9 @@ const meta = {
       loadFxLists: noop,
       pushRecentColor: noop,
       toggleFavoriteEffect: noop,
+      beginPaint: noop,
+      paintCells: noop,
+      endPaint: noop,
     },
   },
 } satisfies Meta<typeof LightsTab>
