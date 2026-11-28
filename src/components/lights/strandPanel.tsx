@@ -1,11 +1,12 @@
 import type { Effect, LightsView, Palette, RangeView, StrandView } from "../../../shared/apiTypes"
+import { briToPct } from "../../../shared/brightness"
 import { Strip } from "@/components/lights/strip"
 import { Button } from "@/components/ui/button"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdownMenu"
 import { Icon } from "@/components/ui/icon"
 import { Slider } from "@/components/ui/slider"
 import { Switch } from "@/components/ui/switch"
-import { briToPct, freeSegs, LOCKED, needMsg, pinLabel, strandMenuId } from "@/lights/model"
+import { freeSegs, LOCKED, needMsg, pinLabel, strandMenuId } from "@/lights/model"
 import { cn } from "@/lib/utils"
 
 const CARD = "rounded-lg border bg-card text-card-foreground"

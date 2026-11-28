@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { ApplyResult, LookRecord, LookTarget, Scene } from "../../shared/apiTypes";
+import { briToPct } from "../../shared/brightness";
 import type { ServerDeps } from "../app";
 import * as looks from "../db/looks";
 import * as scenes from "../db/scenes";
@@ -72,7 +73,7 @@ export function toScene(row: scenes.SceneRow): Scene {
     name: row.name,
     strandKey: row.strandKey,
     ledCount: row.ledCount,
-    summary: `${plural(ranges.length, "range")} · ${on ? `${Math.round((bri / 255) * 100)}%` : "off"}`,
+    summary: `${plural(ranges.length, "range")} · ${on ? `${briToPct(bri)}%` : "off"}`,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };

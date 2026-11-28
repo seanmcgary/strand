@@ -52,7 +52,6 @@ export function hexToHsv(hex: string): Hsv {
 const clone = <T>(v: T): T => structuredClone(v)
 
 export const colorName = (hex: string): string => COLOR_NAMES[hex.toUpperCase()] ?? hex.toUpperCase()
-export const briToPct = (bri: number): number => Math.max(1, Math.round((bri / 255) * 100))
 export const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? "" : "s"}`
 
 export function pinLabel(pins: number[]): string {

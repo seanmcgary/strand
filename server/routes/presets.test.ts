@@ -51,12 +51,13 @@ const lights = (s: Setup) => s.t.inject({ method: "GET", url: s.url("lights") })
 const segsOf = (f: FakeWled) => f.state.seg as unknown as { id: number; start: number; stop: number }[];
 
 describe("POST and GET scenes", () => {
-  // Fails if the POST route is missing or does not snapshot the strand into a scene with a summary.
+  // Fails if the POST route is missing, does not snapshot the strand into a scene, or its summary shows a dim strand as 0%.
   it("saves the strand as a scene and lists it", async () => {
     const s = await split();
+    s.f.applyState({ seg: [seg(0, "Range 1", 0, 150, { bri: 1 }), seg(1, "Range 1", 150, 300)] });
     const res = await save(s, { name: " Party ", strandKey: "o0" });
     expect(res.statusCode).toBe(201);
-    expect(res.json<Scene>()).toMatchObject({ name: "Party", strandKey: "o0", ledCount: 150, summary: "1 range · 100%" });
+    expect(res.json<Scene>()).toMatchObject({ name: "Party", strandKey: "o0", ledCount: 150, summary: "1 range · 1%" });
     const list = await s.t.inject({ method: "GET", url: s.url("scenes") });
     expect(list.json<Scene[]>().map((x) => x.name)).toEqual(["Party"]);
   });
