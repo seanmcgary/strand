@@ -133,3 +133,12 @@ it("picks a recent color as the brush", () => {
   fireEvent.click(screen.getByRole("button", { name: "Fill range" }))
   expect(m.paint()).toEqual(Array(10).fill("#00C850"))
 })
+
+// Fails if a stroke is left open when the editor unmounts mid-drag, which keeps the strand's channel held for the session.
+it("ends a stroke that is cut short by an unmount", () => {
+  const m = mount()
+  fireEvent.pointerDown(m.strip, { clientX: 5, button: 0 })
+  cleanup()
+  expect(m.store.getState().lights.writes["d1|o0"]?.hold).toBeFalsy()
+  expect(m.patch).toHaveBeenCalledTimes(1)
+})

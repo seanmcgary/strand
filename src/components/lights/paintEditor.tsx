@@ -6,9 +6,9 @@ import { Icon } from "@/components/ui/icon"
 import { colorName } from "@/lights/model"
 import { cn } from "@/lib/utils"
 
-/** Cells on a narrow and on a wide screen (Tailwind `md`, as the range card uses). */
+/** Cells on a narrow and on a wide screen (the design's 900 px desktop breakpoint, as the slot sheet uses). */
 const CELLS = { narrow: 48, wide: 120 }
-const WIDE = "(min-width: 768px)"
+const WIDE = "(min-width: 900px)"
 const BLACK = "#000000"
 const HELP = "Tap or drag to paint. The lights change when you let go. With a keyboard: arrow keys move, Space paints."
 const RING = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
@@ -40,6 +40,9 @@ interface LocalProps {
   setCursor: (c: number) => void
   wide: boolean
   setWide: (w: boolean) => void
+  /** The stroke in progress: the last cell it painted. Only one pointer paints at a time. */
+  stroke: { last: number } | null
+  setStroke: (s: { last: number } | null) => void
 }
 
 interface HandlerProps {
@@ -54,9 +57,6 @@ interface HandlerProps {
 
 type BaseProps = PaintEditorProps & LocalProps
 type Props = BaseProps & HandlerProps
-
-/** The stroke in progress: its range, and the last cell it painted. Only one pointer paints at a time. */
-let stroke: { last: number } | null = null
 
 /** First LED of cell `c`. Integer math, so 192 LEDs in 96 cells never rounds a cell short. */
 const cellStart = (len: number, cells: number, c: number): number => Math.floor((c * len) / cells)
@@ -176,6 +176,7 @@ function PaintEditorView(p: Props) {
 export const PaintEditor = compose<Props, PaintEditorProps>(
   withState("cursor", "setCursor", 0),
   withState("wide", "setWide", () => !!globalThis.matchMedia?.(WIDE).matches),
+  withState("stroke", "setStroke", null),
   lifecycle<BaseProps, object, { stop?: () => void }>({
     componentDidMount() {
       const mq = globalThis.matchMedia?.(WIDE)
@@ -186,6 +187,7 @@ export const PaintEditor = compose<Props, PaintEditorProps>(
     },
     componentWillUnmount() {
       this.stop?.()
+      if (this.props.stroke) this.props.actions.endPaint({ id: this.props.id, key: this.props.strand.key })
     },
   }),
   withHandlers<BaseProps, HandlerProps>({
@@ -196,22 +198,22 @@ export const PaintEditor = compose<Props, PaintEditorProps>(
       e.currentTarget.setPointerCapture?.(e.pointerId)
       e.currentTarget.focus()
       const cell = cellAt(e, c.cells)
-      stroke = { last: cell }
+      p.setStroke({ last: cell })
       p.actions.beginPaint({ id: p.id, key: p.strand.key })
       paintSpan(p, cell, cell)
     },
     onMove: (p) => (e: PointerEvent<HTMLDivElement>) => {
       const c = ctxOf(p)
-      if (!stroke || !c) return
+      if (!p.stroke || !c) return
       const cell = cellAt(e, c.cells)
       // Fill the cells a fast drag skipped over.
-      paintSpan(p, Math.min(stroke.last, cell), Math.max(stroke.last, cell))
-      stroke = { last: cell }
+      paintSpan(p, Math.min(p.stroke.last, cell), Math.max(p.stroke.last, cell))
+      p.setStroke({ last: cell })
       p.setCursor(cell)
     },
     onEnd: (p) => () => {
-      if (!stroke) return
-      stroke = null
+      if (!p.stroke) return
+      p.setStroke(null)
       p.actions.endPaint({ id: p.id, key: p.strand.key })
       p.actions.pushRecentColor(p.brush)
     },

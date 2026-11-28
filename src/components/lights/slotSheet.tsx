@@ -74,6 +74,9 @@ interface LocalProps {
   /** Slider values while a drag is in progress. */
   params: Partial<Record<SliderKey, number>>
   setParams: (p: Partial<Record<SliderKey, number>>) => void
+  /** The color area drag in progress. Only one pointer drags at a time. */
+  areaDrag: { hsv: Hsv } | null
+  setAreaDrag: (d: { hsv: Hsv } | null) => void
 }
 
 interface HandlerProps {
@@ -124,9 +127,6 @@ function hsvAt(e: PointerEvent<HTMLDivElement>, v: number): Hsv {
   const y = clamp((e.clientY - rect.top) / rect.height)
   return { h: Math.min(359.9, x * 360), s: 1 - y, v: v || 1 }
 }
-
-/** The color area drag in progress. Only one pointer drags at a time. */
-let areaDrag: { hsv: Hsv } | null = null
 
 /** Sends `fn`'s version of the slot. */
 function editSlot(p: BaseProps, fn: (s: SlotView) => SlotView) {
@@ -470,6 +470,7 @@ export const SlotSheet = compose<Props, SlotSheetProps>(
   withState("fxQuery", "setFxQuery", ""),
   withState("palQuery", "setPalQuery", ""),
   withState("params", "setParams", {}),
+  withState("areaDrag", "setAreaDrag", null),
   withHandlers<BaseProps, HandlerProps>({
     onOpenChange: (p) => (open: boolean) => {
       if (!open) p.onClose()
@@ -487,19 +488,19 @@ export const SlotSheet = compose<Props, SlotSheetProps>(
       e.currentTarget.setPointerCapture?.(e.pointerId)
       e.currentTarget.focus()
       const h = hsvAt(e, p.hsv.v)
-      areaDrag = { hsv: h }
+      p.setAreaDrag({ hsv: h })
       p.setHsv(h)
       p.setHexDraft(null)
     },
     onAreaMove: (p) => (e: PointerEvent<HTMLDivElement>) => {
-      if (!areaDrag) return
-      const h = hsvAt(e, areaDrag.hsv.v)
-      areaDrag = { hsv: h }
+      if (!p.areaDrag) return
+      const h = hsvAt(e, p.areaDrag.hsv.v)
+      p.setAreaDrag({ hsv: h })
       p.setHsv(h)
     },
     onAreaEnd: (p) => () => {
-      const d = areaDrag
-      areaDrag = null
+      const d = p.areaDrag
+      p.setAreaDrag(null)
       if (d) commitColor(p, hsvToHex(d.hsv))
     },
     onAreaKey: (p) => (e: KeyboardEvent<HTMLDivElement>) => {
