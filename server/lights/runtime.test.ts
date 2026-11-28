@@ -26,13 +26,15 @@ afterEach(() => {
 describe("startup timer", () => {
   // Fails if afterWrite stops restarting the timer, or a timer fires more than once.
   it("saves once, startupDelayMs after the last write", async () => {
-    const { f, row, rt } = await setup({ startupDelayMs: 80 });
+    const { f, row, rt } = await setup({ startupDelayMs: 200 });
     rt.afterWrite(row);
-    await sleep(30);
+    await sleep(100);
     rt.afterWrite(row);
-    await sleep(78);
+    // 250 ms in: past the first timer (200 ms), before the restarted one (300 ms).
+    await sleep(150);
     expect(psaves(f)).toHaveLength(0);
-    await sleep(200);
+    await vi.waitFor(() => expect(psaves(f)).toHaveLength(1));
+    await sleep(250);
     expect(psaves(f)).toHaveLength(1);
   });
 

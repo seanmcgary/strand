@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { applyPost, bootSim, listState, simFromState } from "../../test/wledSim";
 import { encodePaint, parseState, type WledState } from "./layoutRead";
-import { buildStartupPreset } from "./startup";
+import { buildStartupPreset, startupPaint } from "./startup";
 
 const seg = (id: number, start: number, stop: number, over: Record<string, unknown> = {}) => ({
   id,
@@ -101,5 +101,20 @@ describe("buildStartupPreset", () => {
     expect(after.on).toBe(false);
     expect(parseState(after).seg.map(noId)).toEqual(before.seg.map(noId));
     expect(sim.slots.find((s) => s?.n === "Peak paint")!.pixels).toEqual(peak);
+  });
+});
+
+describe("startupPaint", () => {
+  const presets = (entries: object[]) => ({ "250": { seg: entries } });
+  const painted = (k: number) => ({ n: `R${k} paint`, start: k * 2, stop: k * 2 + 2, i: encodePaint(["#FF0000", "#00FF00"]) });
+
+  // Fails if startupPaint reads more seg entries than a device can have, so a hostile presets.json can run the server out of memory.
+  it("reads at most 256 entries", () => {
+    expect(Object.keys(startupPaint(presets(Array.from({ length: 300 }, (_, k) => painted(k)))))).toHaveLength(256);
+  });
+
+  // Fails if startupPaint decodes an entry whose name is not a painted segment's.
+  it("skips an entry that is not a painted segment", () => {
+    expect(startupPaint(presets([{ ...painted(0), n: "Porch" }]))).toEqual({});
   });
 });

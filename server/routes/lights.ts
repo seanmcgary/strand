@@ -8,6 +8,9 @@ import { clearLeftovers, deviceError, flashLed, namesOf, readDeviceLights, refus
 import { cutRanges, LayoutError, splitShared, writeStrand } from "../lights/layoutWrite";
 import { loadDevice } from "./settings";
 
+/** A strand key: one output (`o0`) or touching outputs joined with `+` (`o0+o1`). */
+export const STRAND_KEY = "^o\\d+(\\+o\\d+)*$";
+
 const lightsPatchBody = {
   type: "object",
   minProperties: 1,
@@ -19,7 +22,7 @@ const flashBody = {
   type: "object",
   required: ["strandKey", "led"],
   additionalProperties: false,
-  properties: { strandKey: { type: "string", pattern: "^o\\d+(\\+o\\d+)*$" }, led: { type: "integer", minimum: 0 } },
+  properties: { strandKey: { type: "string", pattern: STRAND_KEY }, led: { type: "integer", minimum: 0 } },
 } as const;
 
 const int = { type: "integer" } as const;
@@ -95,7 +98,7 @@ const namesBody = {
     names: {
       type: "object",
       maxProperties: 64,
-      propertyNames: { pattern: "^o\\d+(\\+o\\d+)*$" },
+      propertyNames: { pattern: STRAND_KEY },
       additionalProperties: { type: "string", maxLength: 1024 },
     },
   },

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LightsView, RangeView } from "../../shared/apiTypes";
 import { startFakeWled, type FakeWled } from "../../test/fakeWled";
 import { seeds, type Seed } from "../../test/fixtures/seeds";
@@ -22,7 +22,6 @@ afterEach(async () => {
 });
 
 const posts = (f: FakeWled) => f.requests.filter((r) => r.method === "POST");
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const flashSegs = (f: FakeWled) => (f.state.seg as { n?: string }[]).filter((s) => s.n === FLASH_NAME);
 const candy = Array.from({ length: 100 }, (_, k) => (Math.floor(k / 5) % 2 === 0 ? "#FF0000" : "#FFFFFF"));
 
@@ -176,8 +175,7 @@ describe("POST lights/flash", () => {
     expect(posts(f).at(-1)!.body).toEqual({
       seg: [{ id: 31, start: 150, stop: 151, fx: 0, col: [[255, 255, 255]], bri: 255, on: true, n: "Strand flash" }],
     });
-    await sleep(200);
-    expect(flashSegs(f)).toEqual([]);
+    await vi.waitFor(() => expect(flashSegs(f)).toEqual([]), { timeout: 2000 });
   });
 
   // Fails if a second flash does not delete the first one's segment in its own request.
@@ -186,7 +184,6 @@ describe("POST lights/flash", () => {
     const { t, f, url } = await setup(seeds.backyard, { flashMs: 500 });
     split(f);
     await t.inject({ method: "POST", url: url("lights/flash"), payload: { strandKey: "o1", led: 0 } });
-    await sleep(10);
     await t.inject({ method: "POST", url: url("lights/flash"), payload: { strandKey: "o1", led: 5 } });
     expect(posts(f).at(-1)!.body).toMatchObject({ seg: [{ id: 2, stop: 0 }, { id: 31, start: 155 }] });
     expect(flashSegs(f)).toHaveLength(1);
@@ -287,7 +284,7 @@ describe("strand edit and resolve", () => {
   it("writes two ranges to a split strand and leaves the other strand alone", async () => {
     const s = await setup(seeds.backyard, { startupDelayMs: 50 });
     await resolve(s, "split");
-    await sleep(150);
+    await vi.waitFor(() => expect(psaves(s.f)).toHaveLength(1), { timeout: 2000 });
     s.f.requests.length = 0;
     const base = (await strand(s)).ranges[0]!;
     const other = segsOf(s.f).find((g) => g.start === 150)!;
@@ -300,8 +297,7 @@ describe("strand edit and resolve", () => {
     expect(res.statusCode).toBe(200);
     expect(res.json<LightsView>().strands[0]!.ranges).toEqual(ranges);
     expect(segsOf(s.f).find((g) => g.id === before.id)).toEqual(before);
-    await sleep(200);
-    expect(psaves(s.f)).toHaveLength(1);
+    await vi.waitFor(() => expect(psaves(s.f)).toHaveLength(1), { timeout: 2000 });
   });
 
   // Fails if validation of an Every pattern is skipped before the write.
@@ -410,8 +406,7 @@ describe("strand edit and resolve", () => {
     expect(res.statusCode).toBe(504);
     expect(res.json()).toMatchObject({ error: "device_offline" });
     expect(posts(s.f).length).toBeGreaterThanOrEqual(3);
-    await sleep(200);
-    expect(psaves(s.f)).toHaveLength(1);
+    await vi.waitFor(() => expect(psaves(s.f)).toHaveLength(1), { timeout: 2000 });
   });
 
   const paintRange = (base: RangeView, len: number, colors: string[]): RangeView => ({ ...base, name: "Paint", start: 0, len, pattern: { kind: "individual" }, paint: colors });
@@ -420,15 +415,14 @@ describe("strand edit and resolve", () => {
   it("answers 504 when the paint request fails, with the segments on the device", async () => {
     const s = await setup(seeds.backyard, { startupDelayMs: 50 });
     await resolve(s, "split");
-    await sleep(150);
+    await vi.waitFor(() => expect(psaves(s.f)).toHaveLength(1), { timeout: 2000 });
     s.f.requests.length = 0;
     const base = (await strand(s)).ranges[0]!;
     s.f.failNext("timeout", { method: "POST", path: "/json/state", skip: 1 });
     const res = await patch(s, { ranges: [paintRange(base, 150, Array.from({ length: 150 }, () => "#00FF00"))] });
     expect(res.statusCode).toBe(504);
     expect(segsOf(s.f).find((g) => g.n === "Paint paint")).toBeDefined();
-    await sleep(200);
-    expect(psaves(s.f)).toHaveLength(1);
+    await vi.waitFor(() => expect(psaves(s.f)).toHaveLength(1), { timeout: 2000 });
   });
 
   // Fails if the paint step does not find its segment by name and answer 409 when it has gone.
@@ -447,7 +441,7 @@ describe("strand edit and resolve", () => {
     const s = await setup(seeds.frontRoof, { startupDelayMs: 50 });
     s.f.applyState({ seg: [seg(0, "Range 1", 0, 300)] });
     const base = (await strand(s)).ranges[0]!;
-    const colors = Array.from({ length: 300 }, () => `#${Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, "0").toUpperCase()}`);
+    const colors = Array.from({ length: 300 }, (_, k) => `#${((k * 0x010203 + 0x102030) % 0x1000000).toString(16).padStart(6, "0").toUpperCase()}`);
     const res = await patch(s, { ranges: [paintRange(base, 300, colors)] });
     expect(res.statusCode).toBe(200);
     const id = segsOf(s.f).find((g) => g.n === "Paint paint")!.id;
@@ -456,8 +450,7 @@ describe("strand edit and resolve", () => {
     for (const r of paintPosts) expect(((r.body as { seg: { i: unknown[] } }).seg.i).length).toBeLessThanOrEqual(256 * 3);
     expect(posts(s.f).every((r) => r.body !== undefined)).toBe(true);
     expect(s.f.pixels(id).map((c) => c?.toUpperCase())).toEqual(colors);
-    await sleep(200);
-    expect(psaves(s.f)).toHaveLength(1);
+    await vi.waitFor(() => expect(psaves(s.f)).toHaveLength(1), { timeout: 2000 });
   });
 });
 

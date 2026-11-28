@@ -290,9 +290,10 @@ export function deviceError(e: LayoutError, strandName: string): ApiError {
       return new ApiError(422, "segment_budget", e.message, { need: e.need ?? 0 });
     case "shared":
       return new ApiError(409, "shared", messages.shared(strandName));
+    case "painted":
+      return new ApiError(422, "painted", e.message);
     case "invalid_layout":
-      // `lookFromRange` refuses a painted range with this code; validation reasons are not user text.
-      if (e.message === messages.painted()) return new ApiError(422, "painted", e.message);
+      // Validation reasons are not user text.
       return new ApiError(422, "invalid_layout", messages.invalidLayout());
   }
 }

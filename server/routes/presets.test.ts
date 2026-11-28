@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplyResult, LightsView, LookRecord, RangeView, Scene } from "../../shared/apiTypes";
 import { startFakeWled, type FakeWled } from "../../test/fakeWled";
 import { seeds, type Seed } from "../../test/fixtures/seeds";
@@ -77,16 +77,17 @@ describe("POST and GET scenes", () => {
     expect(res.json()).toMatchObject({ error });
   });
 
-  // Fails if the handler does not cap a device at 256 scenes.
-  it("refuses the 257th scene", async () => {
+  // Fails if the handler does not cap a device at 256 scenes, or counts before the device read so two saves sent together both pass.
+  it("refuses the 257th scene, also when two saves are sent together", async () => {
     const s = await split();
     const content = (await lights(s)).strands[0]!;
-    for (let k = 0; k < 256; k++) {
+    for (let k = 0; k < 255; k++) {
       scenes.insert(s.t.db, { deviceId: s.row.id, name: `S${k}`, strandKey: "o0", ledCount: 150, content: { on: content.on, bri: content.bri, ranges: [] } }, new Date());
     }
-    const res = await save(s, { name: "Last", strandKey: "o0" });
-    expect(res.statusCode).toBe(422);
-    expect(res.json()).toEqual({ error: "too_many", message: "A device can keep 256 scenes." });
+    const res = await Promise.all([save(s, { name: "A", strandKey: "o0" }), save(s, { name: "B", strandKey: "o0" })]);
+    expect(res.map((r) => r.statusCode).sort()).toEqual([201, 422]);
+    expect(res.find((r) => r.statusCode === 422)!.json()).toEqual({ error: "too_many", message: "A device can keep 256 scenes." });
+    expect(scenes.count(s.t.db, s.row.id)).toBe(256);
   });
 
   // Fails if the handler does not refuse a snapshot over 65536 bytes of JSON.
@@ -215,7 +216,6 @@ describe("POST scenes/:id/apply", () => {
 });
 
 describe("looks", () => {
-  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   const posts = (f: FakeWled) => f.requests.filter((r) => r.method === "POST" && r.path === "/json/state");
   const saveLook = (s: Setup, payload: unknown) => s.t.inject({ method: "POST", url: s.url("looks"), payload: payload as object });
   const applyLook = (s: Setup, id: string, payload: unknown) => s.t.inject({ method: "POST", url: s.url(`looks/${id}/apply`), payload: payload as object });
@@ -401,7 +401,7 @@ describe("looks", () => {
     // The delay outlasts the 300 ms device timeout, so the failed write is still running when o0's timer would fire.
     const s = await patio({ startupDelayMs: 500 });
     const rec = await candy(s);
-    await sleep(700);
+    await vi.waitFor(() => expect(psaves(s.f)).toHaveLength(1), { timeout: 2000 });
     s.f.requests.length = 0;
     s.f.failNext("timeout", { method: "POST", path: "/json/state", skip: o0Posts });
     const res = await applyLook(s, rec.id, { targets: [{ strandKey: "o0" }, { strandKey: "o1" }] });
@@ -409,7 +409,6 @@ describe("looks", () => {
     const view = (await lights(s)).strands;
     expect(view.find((x) => x.key === "o0")!.ranges.map((r) => r.pattern.kind)).toEqual(["every", "every"]);
     expect(view.find((x) => x.key === "o1")!.ranges[0]!.pattern).toEqual({ kind: "all" });
-    await sleep(700);
-    expect(psaves(s.f)).toHaveLength(1);
+    await vi.waitFor(() => expect(psaves(s.f)).toHaveLength(1), { timeout: 2000 });
   });
 });

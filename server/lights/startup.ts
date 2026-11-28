@@ -5,8 +5,10 @@ import { decodePaint, encodePaint, FLASH_NAME, isInt, isObject, paintKey, PAINT_
  * the layout and the paint survive a reboot with no Strand server running.
  */
 
-export const STARTUP_ID = 250;
+const STARTUP_ID = 250;
 const STARTUP_NAME = "Strand: startup";
+/** The most segments a device has (`info.leds.maxseg` is at most 256). */
+const MAX_SEGMENTS = 256;
 
 /**
  * The `psave` body: every segment ID from 0 to `maxseg − 1` in order (Plan
@@ -31,15 +33,16 @@ export function buildStartupPreset(state: WledState, paint: PaintMap, maxseg: nu
 }
 
 /**
- * The paint in `/presets.json`'s preset 250, by `paintKey`. A `seg` entry
- * counts only when `n` is a string, `i` is an array, and `start` and `stop` give its length.
+ * The paint in `/presets.json`'s preset 250, by `paintKey`. It reads at most
+ * `MAX_SEGMENTS` entries, as the device's reply is untrusted. An entry counts
+ * only when `n` is a painted segment's name, `i` is an array, and `start` and `stop` give its length.
  */
 export function startupPaint(presets: unknown): PaintMap {
   const preset = isObject(presets) ? presets[String(STARTUP_ID)] : undefined;
   const seg = isObject(preset) && Array.isArray(preset.seg) ? preset.seg : [];
   const out: PaintMap = {};
-  for (const s of seg) {
-    if (!isObject(s) || typeof s.n !== "string" || !Array.isArray(s.i)) continue;
+  for (const s of seg.slice(0, MAX_SEGMENTS)) {
+    if (!isObject(s) || typeof s.n !== "string" || !s.n.endsWith(PAINT_TAG) || !Array.isArray(s.i)) continue;
     const { start, stop } = s;
     if (!isInt(start) || !isInt(stop) || stop <= start || stop - start > 65535) continue;
     out[paintKey(start, s.n)] = decodePaint(s.i, stop - start);

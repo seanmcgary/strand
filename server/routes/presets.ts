@@ -8,6 +8,7 @@ import { ApiError, messages } from "../errors";
 import { deviceError, readDeviceLights, refuseMatrix, writeLayout } from "../lights/deviceLights";
 import { LayoutError, segmentsNeeded, writeStrand } from "../lights/layoutWrite";
 import { lookFromRange, lookToPatches, sceneToPatch, snapshotStrand } from "../lights/snapshots";
+import { STRAND_KEY } from "./lights";
 import { loadDevice } from "./settings";
 
 const NAME_CHARS = 64;
@@ -15,14 +16,13 @@ const MAX_SCENES = 256;
 const MAX_LOOKS = 256;
 const MAX_CONTENT_BYTES = 65536;
 const MAX_TARGETS = 64;
-const STRAND_KEY = "^o\\d+(\\+o\\d+)*$";
 
 const nameProp = { type: "string", maxLength: 1024 } as const;
 const saveBody = {
   type: "object",
   required: ["name", "strandKey"],
   additionalProperties: false,
-  properties: { name: nameProp, strandKey: { type: "string", pattern: "^o\\d+(\\+o\\d+)*$" } },
+  properties: { name: nameProp, strandKey: { type: "string", pattern: STRAND_KEY } },
 } as const;
 const renameBody = {
   type: "object",
@@ -66,7 +66,7 @@ function checkedName(name: string): string {
 
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? "" : "s"}`;
 
-export function toScene(row: scenes.SceneRow): Scene {
+function toScene(row: scenes.SceneRow): Scene {
   const { on, bri, ranges } = row.content;
   return {
     id: row.id,
@@ -79,7 +79,7 @@ export function toScene(row: scenes.SceneRow): Scene {
   };
 }
 
-export function toLookRecord(row: looks.LookRow): LookRecord {
+function toLookRecord(row: looks.LookRow): LookRecord {
   return { id: row.id, name: row.name, look: row.look, createdAt: row.createdAt, updatedAt: row.updatedAt };
 }
 
@@ -100,13 +100,14 @@ export async function presetsRoutes(app: FastifyInstance, deps: ServerDeps): Pro
     async (request, reply): Promise<Scene> => {
       const row = loadDevice(deps, request.params.id);
       const name = checkedName(request.body.name);
-      if (scenes.count(deps.db, row.id) >= MAX_SCENES) throw new ApiError(422, "too_many", messages.tooManyScenes());
       const d = await readDeviceLights(deps, row);
       refuseMatrix(d);
       const view = d.view.strands.find((s) => s.key === request.body.strandKey);
       if (!view) throw new ApiError(409, "strand_changed", messages.strandChanged());
       const content = snapshotStrand(view);
       if (Buffer.byteLength(JSON.stringify(content)) > MAX_CONTENT_BYTES) throw new ApiError(422, "invalid_layout", messages.contentTooLarge());
+      // No await between the count and the insert, so saves sent together cannot pass the cap together.
+      if (scenes.count(deps.db, row.id) >= MAX_SCENES) throw new ApiError(422, "too_many", messages.tooManyScenes(MAX_SCENES));
       const saved = scenes.insert(deps.db, { deviceId: row.id, name, strandKey: view.key, ledCount: view.len, content }, deps.now());
       return reply.code(201).send(toScene(saved));
     },
@@ -165,13 +166,14 @@ export async function presetsRoutes(app: FastifyInstance, deps: ServerDeps): Pro
     async (request, reply): Promise<LookRecord> => {
       const row = loadDevice(deps, request.params.id);
       const name = checkedName(request.body.name);
-      if (looks.count(deps.db, row.id) >= MAX_LOOKS) throw new ApiError(422, "too_many", messages.tooManyLooks());
       const d = await readDeviceLights(deps, row);
       refuseMatrix(d);
       const view = d.view.strands.find((s) => s.key === request.body.strandKey);
       if (!view) throw new ApiError(409, "strand_changed", messages.strandChanged());
       const range = view.ranges.find((r) => r.name === request.body.range);
       if (!range) throw new ApiError(404, "not_found", messages.rangeGone());
+      // No await between the count and the insert, so saves sent together cannot pass the cap together.
+      if (looks.count(deps.db, row.id) >= MAX_LOOKS) throw new ApiError(422, "too_many", messages.tooManyLooks(MAX_LOOKS));
       try {
         const saved = looks.insert(deps.db, { deviceId: row.id, name, look: lookFromRange(range) }, deps.now());
         return reply.code(201).send(toLookRecord(saved));

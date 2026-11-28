@@ -11,7 +11,7 @@ export type SegPatch = { id: number } & Partial<Omit<WledSeg, "id">> & { rev?: b
 
 export type LayoutWrite = { seg: SegPatch[][]; paint: { name: string; start: number; i: (number | string)[] }[] };
 
-export type LayoutErrorCode = "segment_budget" | "invalid_layout" | "shared";
+export type LayoutErrorCode = "segment_budget" | "invalid_layout" | "shared" | "painted";
 
 export class LayoutError extends Error {
   code: LayoutErrorCode;

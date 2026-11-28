@@ -124,7 +124,7 @@ describe("request guard on every route", () => {
     "/api/devices",
     "/api/discovery",
     "/api/preferences",
-    ...["info", "config", "capabilities", "pins", "state", "effects", "palettes", "pending-reboot"].map(
+    ...["info", "config", "capabilities", "pins", "state", "effects", "palettes", "pending-reboot", "lights", "strand-groups", "scenes", "looks"].map(
       (r) => `/api/devices/x/${r}`,
     ),
   ];

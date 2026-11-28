@@ -41,9 +41,9 @@ export function snapshotStrand(view: StrandView): StrandSnapshot {
   };
 }
 
-/** The look a range keeps. A painted range has none, so it throws `invalid_layout`; the endpoint maps that to `painted`. */
+/** The look a range keeps. A painted range has none, so it throws `painted`. */
 export function lookFromRange(range: RangeView): Look {
-  if (range.pattern.kind === "individual") throw new LayoutError("invalid_layout", messages.painted());
+  if (range.pattern.kind === "individual") throw new LayoutError("painted", messages.painted());
   return { pattern: { ...range.pattern }, slots: range.slots.map(slotLook) };
 }
 

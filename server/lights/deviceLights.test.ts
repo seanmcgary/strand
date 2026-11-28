@@ -17,12 +17,11 @@ describe("device writes during a startup save", () => {
     s.rt.afterWrite(s.row);
     await vi.waitFor(() => expect(s.f.requests.some((r) => r.path === "/presets.json")).toBe(true));
     const write = writeLayout(s.deps, s.row, (_d, send) => send({ seg: [[{ id: 0, start: 0, stop: 150, n: "Porch" }]], paint: [] }));
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await sleep(50);
     release();
     await write;
     await vi.waitFor(() => expect(psaves(s.f).length).toBeGreaterThanOrEqual(1));
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    expect(names(s.f.state)).toEqual(["Porch"]);
+    await vi.waitFor(() => expect(names(s.f.state)).toEqual(["Porch"]));
   });
 
   // Fails if a flash start does not wait for a save in flight, whose psave then deletes the flash segment.
@@ -33,7 +32,7 @@ describe("device writes during a startup save", () => {
     s.rt.afterWrite(s.row);
     await vi.waitFor(() => expect(s.f.requests.some((r) => r.path === "/presets.json")).toBe(true));
     const flash = flashLed(s.deps, d, 5);
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await sleep(50);
     release();
     await flash;
     await vi.waitFor(() => expect(psaves(s.f)).toHaveLength(1));
@@ -67,8 +66,7 @@ describe("flash", () => {
     await sleep(250);
     release();
     await Promise.all([power, second]);
-    await sleep(50);
-    expect(flashStarts(s.f.state)).toEqual([6]);
+    await vi.waitFor(() => expect(flashStarts(s.f.state)).toEqual([6]));
   });
 
   // Fails if clearLeftovers decides before it waits its turn, and deletes a flash started ahead of it.
