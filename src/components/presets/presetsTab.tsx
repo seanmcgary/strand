@@ -1,6 +1,7 @@
 import { compose, withHandlers, withState } from "recompose"
 import type { Device, LightsView, Look, LookRecord, LookTarget, Scene, StrandView } from "../../../shared/apiTypes"
-import { PresetsDialogs, type PresetKind, type PresetsDialog } from "@/components/presets/presetsDialogs"
+import type { PresetKind, PresetsDialog } from "@/components/presets/presetsDialogTypes"
+import { PresetsDialogs } from "@/components/presets/presetsDialogs"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdownMenu"
@@ -191,7 +192,7 @@ function PresetsTabView(props: Props) {
           <ul className={cn(CARD, "divide-y")}>
             {scenes.map((sc) => {
               const st = strandOf(v, sc.strandKey)
-              const busy = presets.applying === sc.id
+              const busy = presets.applying.includes(sc.id)
               return (
                 <li key={sc.id} className={ROW}>
                   <div className="flex min-w-0 flex-1 flex-col gap-0.5">

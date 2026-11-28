@@ -84,11 +84,27 @@ describe("scenes", () => {
     let answer!: (r: { view: typeof after; warnings: string[] }) => void
     vi.spyOn(api, "applyScene").mockReturnValue(new Promise((r) => (answer = r)))
     const done = store.dispatch(applyScene({ id: "d1", scene: scene("s1", "Party", "o1") }))
-    expect(presets().applying).toBe("s1")
+    expect(presets().applying).toEqual(["s1"])
     answer({ view: after, warnings: ["W1", "W2"] })
     await done
-    expect([presets().applying, lights().view, lights().selected]).toEqual([null, after, "o1"])
+    expect([presets().applying, lights().view, lights().selected]).toEqual([[], after, "o1"])
     expect(toasts()).toEqual([["Applied Party", "W1 W2"]])
+  })
+
+  // Fails if one apply finishing clears the busy mark of another that is still in flight.
+  it("keeps each scene busy until its own apply finishes", async () => {
+    const { store, presets } = setup()
+    const answers: Array<(r: { view: typeof after; warnings: string[] }) => void> = []
+    vi.spyOn(api, "applyScene").mockImplementation(() => new Promise((r) => answers.push(r)))
+    const first = store.dispatch(applyScene({ id: "d1", scene: scene("s1", "A") }))
+    const second = store.dispatch(applyScene({ id: "d1", scene: scene("s2", "B") }))
+    expect(presets().applying).toEqual(["s1", "s2"])
+    answers[0]!({ view: after, warnings: [] })
+    await first
+    expect(presets().applying).toEqual(["s2"])
+    answers[1]!({ view: after, warnings: [] })
+    await second
+    expect(presets().applying).toEqual([])
   })
 
   // Fails if a failed scene apply stops re-reading the lights, since the device may hold part of the write.

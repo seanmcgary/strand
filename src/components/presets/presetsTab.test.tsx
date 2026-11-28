@@ -251,15 +251,32 @@ it("applies a look to one range, and keeps the dialog open on a failure", async 
   expect(screen.getByText("Changed 1 range.")).toBeTruthy()
 })
 
-// Fails if a shared strand stops being locked in the Apply to... tree.
-it("disables a shared strand in the apply tree with its explanation", async () => {
+// Fails if a shared strand stops being locked, loses its reason as a description, or stops being focusable.
+it("locks a shared strand in the apply tree with its explanation, and focus starts on the first free strand", async () => {
   lightsView = view([strand("o0", "Strand 1", 150, [allRange("Patio", 0, 150)], { shared: { with: ["o1"] } }), strand("o1", "Strand 2", 100, [allRange("Fence", 0, 100)], { start: 150 })])
   looks = [look("l1", "Candy")]
   await open()
   await click(screen.getByRole("button", { name: "Apply to…" }))
-  const box = within(dialog()).getByRole("checkbox", { name: /Strand 1/ }) as HTMLButtonElement
-  expect(box.disabled).toBe(true)
-  expect(within(dialog()).getByText(/Shares a segment with another strand/)).toBeTruthy()
+  const box = within(dialog()).getByRole("checkbox", { name: /Strand 1/ })
+  expect(document.activeElement?.id).toBe("lt-o1")
+  expect(box.getAttribute("aria-disabled")).toBe("true")
+  expect(desc(box)).toMatch(/Shares a segment with another strand/)
+  await click(box)
+  expect(box.getAttribute("aria-checked")).toBe("false")
+})
+
+// Fails if a tick is keyed by position, so a re-read that reorders the ranges retargets it.
+it("keeps a ticked range after a failed apply re-reads reordered ranges", async () => {
+  looks = [look("l1", "Candy")]
+  await open()
+  await click(screen.getByRole("button", { name: "Apply to…" }))
+  await click(within(dialog()).getByRole("checkbox", { name: /Patio/ }))
+  override = (m, p) => (m === "POST" && p.endsWith("/apply") ? busy(409, "strand_changed", "The strands changed.")() : undefined)
+  lightsView = view([strand("o0", "Strand 1", 150, [allRange("Kitchen", 0, 90), allRange("Patio", 90, 60)]), two.strands[1]!])
+  await click(within(dialog()).getByRole("button", { name: "Apply to 1 range" }))
+  override = () => undefined
+  await click(within(dialog()).getByRole("button", { name: "Apply to 1 range" }))
+  expect(last("POST", "/looks/l1/apply")?.body).toEqual({ targets: [{ strandKey: "o0", range: "Patio" }] })
 })
 
 // Fails if a rename refusal stops showing under the field or closes the dialog.

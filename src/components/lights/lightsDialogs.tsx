@@ -1,19 +1,15 @@
 import type { FormEvent, KeyboardEvent } from "react"
 import { compose, withHandlers, withState } from "recompose"
 import type { LedOutput, LightsView, StrandView } from "../../../shared/apiTypes"
+import { CancelButton, DialogShell, Spinner } from "@/components/dialogShell"
 import { Button } from "@/components/ui/button"
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Icon } from "@/components/ui/icon"
+import { DialogFooter } from "@/components/ui/dialog"
 import { Skeleton } from "@/components/ui/skeleton"
 import { adjacentPairs, COMBINE_BUTTON_ID, cutRanges, nameError, pinLabel, rangeMenuId, strandMenuId } from "@/lights/model"
+import { FORM_DESCRIPTION, FORM_MESSAGE, INPUT, LABEL } from "@/lib/dialogStyles"
 import { cn } from "@/lib/utils"
 import type { ThunkError } from "@/store/createApiThunk"
 
-const LABEL = "text-sm font-medium leading-none"
-const FORM_DESCRIPTION = "text-[13px] leading-snug text-muted-foreground"
-const FORM_MESSAGE = "text-[13px] font-medium text-danger"
-const INPUT =
-  "flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-base shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 aria-[invalid=true]:border-danger aria-[invalid=true]:focus-visible:ring-danger sm:text-sm"
 const SUBTLE_BOX = "rounded-md border bg-muted/40 p-3"
 const RADIO_ROW =
   "flex w-full items-center gap-3 rounded-md border p-3 text-left hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring aria-checked:border-primary aria-checked:bg-primary/10"
@@ -45,10 +41,6 @@ function returnTarget(d: LightsDialog): HTMLElement | null {
   return document.getElementById(id) ?? document.querySelector<HTMLElement>('section[aria-labelledby="strand-h"] [aria-haspopup="menu"]')
 }
 
-function Spinner() {
-  return <Icon name="loader-circle" className="motion-safe:animate-spin" />
-}
-
 interface ShellProps {
   dialog: LightsDialog
   onClose: () => void
@@ -57,37 +49,7 @@ interface ShellProps {
   children: React.ReactNode
 }
 
-/** An open dialog that returns focus to the control that opened it. */
-function Shell({ dialog, onClose, title, description, children }: ShellProps) {
-  return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent
-        className="max-w-md"
-        {...(description ? {} : { "aria-describedby": undefined })}
-        onCloseAutoFocus={(e) => {
-          const el = returnTarget(dialog)
-          if (!el) return
-          e.preventDefault()
-          el.focus()
-        }}
-      >
-        <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
-          {description ? <DialogDescription>{description}</DialogDescription> : null}
-        </DialogHeader>
-        {children}
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-const CancelButton = () => (
-  <DialogClose asChild>
-    <Button type="button" variant="outline">
-      Cancel
-    </Button>
-  </DialogClose>
-)
+const Shell = ({ dialog, ...rest }: ShellProps) => <DialogShell returnFocus={() => returnTarget(dialog)} {...rest} />
 
 // Rename (range or strand) ---------------------------------------------------
 

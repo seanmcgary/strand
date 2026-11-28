@@ -31,7 +31,7 @@ const presets = (over: Partial<DevicePresets> = {}): DevicePresets => ({
   looks: [look("l1", "Candy cane", [[255, 0, 0], [255, 255, 255]], "Chase"), look("l2", "Ocean", [[0, 80, 255]], "Solid")],
   status: "ok",
   error: null,
-  applying: null,
+  applying: [],
   ...over,
 })
 const noop = () => {}
@@ -65,7 +65,7 @@ type Story = StoryObj<typeof meta>
 
 export const Default: Story = {}
 export const Empty: Story = { args: { presets: presets({ scenes: [], looks: [] }) } }
-export const Applying: Story = { args: { presets: presets({ applying: "s1" }) } }
+export const Applying: Story = { args: { presets: presets({ applying: ["s1"] }) } }
 export const SceneProblems: Story = {
   args: { presets: presets({ scenes: [scene("s1", "Evening glow", { ledCount: 200 }), scene("s2", "Gone", { strandKey: "o5" })] }) },
 }

@@ -11,15 +11,15 @@ export interface DevicePresets {
   looks: LookRecord[] | null
   status: "idle" | "loading" | "ok" | "error"
   error: ThunkError | null
-  /** The id of the scene whose apply is in flight. */
-  applying: string | null
+  /** The ids of the scenes whose apply is in flight. */
+  applying: string[]
 }
 
 export interface PresetsState {
   byDevice: Record<string, DevicePresets>
 }
 
-const EMPTY: DevicePresets = { scenes: null, looks: null, status: "idle", error: null, applying: null }
+const EMPTY: DevicePresets = { scenes: null, looks: null, status: "idle", error: null, applying: [] }
 
 const dev = (state: PresetsState, id: string): DevicePresets => (state.byDevice[id] ??= structuredClone(EMPTY))
 
@@ -87,13 +87,15 @@ export const presetsSlice = createSlice({
       d.scenes = d.scenes?.filter((s) => s.id !== action.meta.arg.sceneId) ?? null
     })
     .addCase(sendApplyScene.pending, (state, action) => {
-      dev(state, action.meta.arg.id).applying = action.meta.arg.scene.id
+      dev(state, action.meta.arg.id).applying.push(action.meta.arg.scene.id)
     })
     .addCase(sendApplyScene.fulfilled, (state, action) => {
-      dev(state, action.meta.arg.id).applying = null
+      const d = dev(state, action.meta.arg.id)
+      d.applying = d.applying.filter((x) => x !== action.meta.arg.scene.id)
     })
     .addCase(sendApplyScene.rejected, (state, action) => {
-      dev(state, action.meta.arg.id).applying = null
+      const d = dev(state, action.meta.arg.id)
+      d.applying = d.applying.filter((x) => x !== action.meta.arg.scene.id)
     })
     .addCase(sendCreateLook.fulfilled, (state, action) => {
       dev(state, action.meta.arg.id).looks?.push(action.payload)
