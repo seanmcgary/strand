@@ -6,6 +6,7 @@ import { Provider } from "react-redux"
 import { MemoryRouter, Route, Routes } from "react-router-dom"
 import type { LightsView, LookRecord, Scene } from "../../../shared/apiTypes"
 import { allRange, device, slot, strand, view } from "../../../test/lightsView"
+import { stubResizeObserver } from "../../../test/renderTab"
 import { routes } from "@/router"
 import { makeStore, reducers } from "@/store"
 
@@ -42,14 +43,7 @@ let scenes: Scene[]
 let looks: LookRecord[]
 let override: (method: string, path: string) => Reply | undefined
 
-beforeAll(() => {
-  // jsdom has no ResizeObserver, which Radix's popper needs to open a menu.
-  globalThis.ResizeObserver = class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  }
-})
+beforeAll(stubResizeObserver)
 beforeEach(() => {
   calls = []
   lightsView = two

@@ -1,46 +1,14 @@
 // @vitest-environment jsdom
 import "@/lib/reactCompat"
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
+import { act, cleanup, fireEvent, screen } from "@testing-library/react"
 import { afterEach, beforeAll, expect, it, vi } from "vitest"
-import type { LightsView, RangeView, StrandPatch } from "../../../shared/apiTypes"
+import type { RangeView, StrandPatch } from "../../../shared/apiTypes"
 import { LOCKED, needMsg } from "@/lights/model"
-import { allRange, device, lights, slot, strand, view } from "../../../test/lightsView"
-import { LightsTab, type LightsActions } from "./lightsTab"
+import { allRange, slot, strand, view } from "../../../test/lightsView"
+import { renderTab, stubResizeObserver } from "../../../test/renderTab"
 
-beforeAll(() => {
-  // jsdom has no ResizeObserver, which Radix's popper needs to open the menu.
-  globalThis.ResizeObserver = class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  }
-})
+beforeAll(stubResizeObserver)
 afterEach(cleanup)
-
-const prefs = { recentColors: [], favoriteEffects: [], loaded: true }
-
-function renderTab(v: LightsView) {
-  const actions: LightsActions = {
-    editStrand: vi.fn(() => true),
-    selectStrand: vi.fn(),
-    selectRange: vi.fn(),
-    resolveShared: vi.fn(),
-    loadLights: vi.fn(),
-    toast: vi.fn(),
-    flashLed: vi.fn(),
-    setStrandGroups: vi.fn(() => ({ unwrap: () => Promise.resolve() })),
-    setStrandName: vi.fn(() => ({ unwrap: () => Promise.resolve() })),
-    loadOutputs: vi.fn(),
-    loadFxLists: vi.fn(),
-    pushRecentColor: vi.fn(),
-    toggleFavoriteEffect: vi.fn(),
-    beginPaint: vi.fn(),
-    paintCells: vi.fn(),
-    endPaint: vi.fn(),
-  }
-  render(<LightsTab device={device} offline={false} lights={lights(v)} strand={v.strands[0] ?? null} prefs={prefs} actions={actions} />)
-  return actions
-}
 
 /** The text of the element that describes `el`. */
 const desc = (el: HTMLElement) => document.getElementById(el.getAttribute("aria-describedby") ?? "")?.textContent

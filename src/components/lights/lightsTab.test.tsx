@@ -1,37 +1,12 @@
 // @vitest-environment jsdom
 import "@/lib/reactCompat"
 import { afterEach, expect, it, vi } from "vitest"
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
-import type { LightsView, RangeView } from "../../../shared/apiTypes"
-import { allRange, device, lights, strand, view } from "../../../test/lightsView"
-import { LightsTab, type LightsActions } from "./lightsTab"
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react"
+import type { RangeView } from "../../../shared/apiTypes"
+import { allRange, strand, view } from "../../../test/lightsView"
+import { renderTab } from "../../../test/renderTab"
 
 afterEach(cleanup)
-
-const prefs = { recentColors: [], favoriteEffects: [], loaded: true }
-
-function renderTab(v: LightsView) {
-  const actions: LightsActions = {
-    editStrand: vi.fn(() => true),
-    selectStrand: vi.fn(),
-    selectRange: vi.fn(),
-    resolveShared: vi.fn(),
-    loadLights: vi.fn(),
-    toast: vi.fn(),
-    flashLed: vi.fn(),
-    setStrandGroups: vi.fn(() => ({ unwrap: () => Promise.resolve() })),
-    setStrandName: vi.fn(() => ({ unwrap: () => Promise.resolve() })),
-    loadOutputs: vi.fn(),
-    loadFxLists: vi.fn(),
-    pushRecentColor: vi.fn(),
-    toggleFavoriteEffect: vi.fn(),
-    beginPaint: vi.fn(),
-    paintCells: vi.fn(),
-    endPaint: vi.fn(),
-  }
-  render(<LightsTab device={device} offline={false} lights={lights(v)} strand={v.strands[0] ?? null} prefs={prefs} actions={actions} />)
-  return actions
-}
 
 const one = view([strand("o0", "Strand 1", 120, [allRange("Patio", 0, 120)])], { segments: { used: 7, max: 32 } })
 

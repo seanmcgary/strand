@@ -8,6 +8,7 @@ import type { LightsView } from "../../../shared/apiTypes"
 import { routes } from "@/router"
 import { makeStore, reducers } from "@/store"
 import { allRange, device, strand, view } from "../../../test/lightsView"
+import { stubResizeObserver } from "../../../test/renderTab"
 
 /** The dialogs run against the whole device screen and its store, with `fetch` as the app server. */
 
@@ -23,14 +24,7 @@ let lv: LightsView
 let replies: Record<string, Reply>
 let gates: Record<string, Promise<void>>
 
-beforeAll(() => {
-  // jsdom has no ResizeObserver, which Radix's popper needs to open the menu.
-  globalThis.ResizeObserver = class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  }
-})
+beforeAll(stubResizeObserver)
 
 beforeEach(() => {
   calls = []
