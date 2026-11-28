@@ -2,12 +2,13 @@ import { compose, withHandlers, withState } from "recompose"
 import type { Device, RangeView, StrandPatch, StrandView } from "../../../shared/apiTypes"
 import { LightsDialogs, type LightsDialog } from "@/components/lights/lightsDialogs"
 import { RangeCard } from "@/components/lights/rangeCard"
+import { SlotSheet } from "@/components/lights/slotSheet"
 import { StrandPanel } from "@/components/lights/strandPanel"
 import { StrandPicker } from "@/components/lights/strandPicker"
 import { Button } from "@/components/ui/button"
 import { Icon } from "@/components/ui/icon"
 import { Skeleton } from "@/components/ui/skeleton"
-import { freeSegs, handleId, mergeInto, nextRangeName, rangeHeaderId, splitRange } from "@/lights/model"
+import { freeSegs, handleId, mergeInto, nextRangeName, rangeHeaderId, slotRowId, splitRange } from "@/lights/model"
 import { cn } from "@/lib/utils"
 import type { ThunkError } from "@/store/createApiThunk"
 import type { DeviceLights } from "@/store/slices/lights"
@@ -34,10 +35,13 @@ export interface LightsActions {
   /** Rejects with a `ThunkError` the caller shows. */
   setStrandName: (a: { id: string; key: string; name: string }) => { unwrap: () => Promise<unknown> }
   loadOutputs: (id: string) => unknown
+  loadFxLists: (id: string) => unknown
+  pushRecentColor: (hex: string) => unknown
+  toggleFavoriteEffect: (name: string) => unknown
 }
 
 /** The slot the slot sheet edits. */
-type SlotTarget = { key: string; i: number; s: number }
+type SlotTarget = { key: string; r: number; s: number }
 
 export interface LightsTabProps {
   device: Device
@@ -75,6 +79,9 @@ interface HandlerProps {
   onDeleteRange: (i: number) => void
   onRange: (i: number, next: RangeView) => void
   onOpenSlot: (i: number, s: number) => void
+  onCloseSlot: () => void
+  onEditSlot: (ranges: RangeView[]) => boolean
+  onRetryFx: () => void
   onCloseDialog: () => void
   onRetryOutputs: () => void
   onSaveRangeName: (key: string, i: number, name: string) => void
@@ -203,6 +210,25 @@ function LightsTabView(props: Props) {
           </section>
         </>
       )}
+      {props.slotTarget ? (
+        <SlotSheet
+          key={`${props.slotTarget.key}-${props.slotTarget.r}-${props.slotTarget.s}`}
+          target={props.slotTarget}
+          strand={v.strands.find((x) => x.key === props.slotTarget?.key) ?? null}
+          effects={lights.effects}
+          palettes={lights.palettes}
+          fxStatus={lights.fxStatus}
+          fxError={lights.fxError}
+          onRetryFx={props.onRetryFx}
+          recentColors={props.prefs.recentColors}
+          favoriteEffects={props.prefs.favoriteEffects}
+          onEdit={props.onEditSlot}
+          onPushRecent={props.actions.pushRecentColor}
+          onToggleFavorite={props.actions.toggleFavoriteEffect}
+          onToast={props.actions.toast}
+          onClose={props.onCloseSlot}
+        />
+      ) : null}
       {props.dialog ? (
         <LightsDialogs
           dialog={props.dialog}
@@ -312,7 +338,20 @@ export const LightsTab = compose<Props, LightsTabProps>(
       if (p.strand) edit(p, { ranges: p.strand.ranges.with(i, next) })
     },
     onOpenSlot: (p) => (i: number, s: number) => {
-      if (p.strand) p.setSlotTarget({ key: p.strand.key, i, s })
+      if (p.strand) p.setSlotTarget({ key: p.strand.key, r: i, s })
+    },
+    onCloseSlot: (p) => () => {
+      const t = p.slotTarget
+      p.setSlotTarget(null)
+      // The sheet is gone once this renders; the slot's row takes the focus back.
+      if (t) setTimeout(() => document.getElementById(slotRowId(t.key, t.r, t.s))?.focus())
+    },
+    onEditSlot: (p) => (ranges: RangeView[]) => {
+      const key = p.slotTarget?.key
+      return !!key && p.actions.editStrand({ id: p.device.id, key, patch: { ranges } })
+    },
+    onRetryFx: (p) => () => {
+      p.actions.loadFxLists(p.device.id)
     },
     onCloseDialog: (p) => () => p.setDialog(null),
     onRetryOutputs: (p) => () => {

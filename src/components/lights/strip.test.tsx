@@ -22,6 +22,9 @@ function renderTab(v: LightsView) {
     setStrandGroups: vi.fn(() => ({ unwrap: () => Promise.resolve() })),
     setStrandName: vi.fn(() => ({ unwrap: () => Promise.resolve() })),
     loadOutputs: vi.fn(),
+    loadFxLists: vi.fn(),
+    pushRecentColor: vi.fn(),
+    toggleFavoriteEffect: vi.fn(),
   }
   render(<LightsTab device={device} offline={false} lights={lights(v)} strand={v.strands[0] ?? null} prefs={prefs} actions={actions} />)
   return actions

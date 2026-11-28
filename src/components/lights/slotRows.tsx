@@ -1,6 +1,6 @@
 import type { Effect, Palette, RangeView, SlotView } from "../../../shared/apiTypes"
 import { Icon } from "@/components/ui/icon"
-import { slotBackground, slotText } from "@/lights/model"
+import { slotBackground, slotRowId, slotText } from "@/lights/model"
 import { cn } from "@/lib/utils"
 
 const LABEL = "text-sm font-medium leading-none"
@@ -36,7 +36,7 @@ export function SlotRows({ strandKey, i, range, effects, palettes, onOpenSlot }:
           <li key={k}>
             <button
               type="button"
-              id={`slot-${strandKey}-${i}-${k}`}
+              id={slotRowId(strandKey, i, k)}
               className="flex min-h-12 w-full items-center gap-3 rounded-md px-2 py-2 text-left hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               onClick={() => onOpenSlot(k)}
             >

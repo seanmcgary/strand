@@ -46,7 +46,7 @@ import {
   setStrandName,
   type DeviceLights,
 } from "@/store/slices/lights"
-import { loadPreferences, type PreferencesState } from "@/store/slices/preferences"
+import { loadPreferences, pushRecentColor, toggleFavoriteEffect, type PreferencesState } from "@/store/slices/preferences"
 import { toast, type ToastItem } from "@/store/slices/toasts"
 
 type Tab = "lights" | "presets" | "settings"
@@ -103,6 +103,8 @@ const actions = {
   loadLights,
   loadFxLists,
   loadPreferences,
+  pushRecentColor,
+  toggleFavoriteEffect,
   setPower,
   rebootNow,
   retryDevice,

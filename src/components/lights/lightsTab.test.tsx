@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import "@/lib/reactCompat"
 import { afterEach, expect, it, vi } from "vitest"
-import { cleanup, fireEvent, render, screen } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import type { LightsView } from "../../../shared/apiTypes"
 import { allRange, device, lights, strand, view } from "../../../test/lightsView"
 import { LightsTab, type LightsActions } from "./lightsTab"
@@ -22,6 +22,9 @@ function renderTab(v: LightsView) {
     setStrandGroups: vi.fn(() => ({ unwrap: () => Promise.resolve() })),
     setStrandName: vi.fn(() => ({ unwrap: () => Promise.resolve() })),
     loadOutputs: vi.fn(),
+    loadFxLists: vi.fn(),
+    pushRecentColor: vi.fn(),
+    toggleFavoriteEffect: vi.fn(),
   }
   render(<LightsTab device={device} offline={false} lights={lights(v)} strand={v.strands[0] ?? null} prefs={prefs} actions={actions} />)
   return actions
@@ -66,4 +69,16 @@ it("locks a shared strand behind Split by strand or Combine strands", () => {
   const handle = screen.getByRole("slider", { name: "Boundary between Patio and Porch" })
   expect(handle.getAttribute("aria-disabled")).toBe("true")
   expect(handle.tabIndex).toBe(-1)
+})
+
+// Fails if a slot row stops opening the slot sheet, or closing it stops returning focus to the row.
+it("opens the slot sheet from a slot row and returns focus on Escape", async () => {
+  renderTab(one)
+  const row = screen.getByRole("button", { name: /Slot 1/ })
+  fireEvent.click(row)
+  const dialog = screen.getByRole("dialog")
+  expect(within(dialog).getByRole("slider", { name: "Hue and saturation" })).toBeTruthy()
+  fireEvent.keyDown(dialog, { key: "Escape" })
+  expect(screen.queryByRole("dialog")).toBeNull()
+  await waitFor(() => expect(document.activeElement).toBe(row))
 })

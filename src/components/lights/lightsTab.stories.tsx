@@ -29,6 +29,9 @@ const meta = {
       setStrandGroups: () => ({ unwrap: () => Promise.resolve() }),
       setStrandName: () => ({ unwrap: () => Promise.resolve() }),
       loadOutputs: noop,
+      loadFxLists: noop,
+      pushRecentColor: noop,
+      toggleFavoriteEffect: noop,
     },
   },
 } satisfies Meta<typeof LightsTab>

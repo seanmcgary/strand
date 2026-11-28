@@ -23,11 +23,32 @@ const MAX_SLOTS = 16
 const MAX_GROUP = 255
 const NAME_CHARS = 64
 
-const rgbOf = (hex: string): number[] => {
+export const rgbOf = (hex: string): number[] => {
   const n = parseInt(hex.replace("#", ""), 16)
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
 }
-const hexOf = (rgb: number[]): string => `#${rgb.slice(0, 3).map((c) => c.toString(16).padStart(2, "0")).join("").toUpperCase()}`
+export const hexOf = (rgb: number[]): string => `#${rgb.slice(0, 3).map((c) => c.toString(16).padStart(2, "0")).join("").toUpperCase()}`
+export const isHex = (t: string): boolean => /^#?[0-9a-f]{6}$/i.test(t.trim())
+export const normHex = (t: string): string => `#${t.trim().replace("#", "").toUpperCase()}`
+
+export type Hsv = { h: number; s: number; v: number }
+/** `h` 0-360, `s` and `v` 0-1. */
+export function hsvToHex({ h, s, v }: Hsv): string {
+  const f = (n: number) => {
+    const k = (n + h / 60) % 6
+    return Math.round((v - v * s * Math.max(0, Math.min(k, 4 - k, 1))) * 255)
+  }
+  return hexOf([f(5), f(3), f(1)])
+}
+export function hexToHsv(hex: string): Hsv {
+  const [r, g, b] = rgbOf(hex).map((c) => c / 255) as [number, number, number]
+  const max = Math.max(r, g, b)
+  const d = max - Math.min(r, g, b)
+  let h = 0
+  if (d) h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4
+  return { h: (h * 60 + 360) % 360, s: max ? d / max : 0, v: max }
+}
+
 const clone = <T>(v: T): T => structuredClone(v)
 
 export const colorName = (hex: string): string => COLOR_NAMES[hex.toUpperCase()] ?? hex.toUpperCase()
@@ -198,6 +219,8 @@ export function mergeInto(fxs: Effect[] | null, pals: Palette[] | null, rs: Rang
 export const handleId = (key: string, i: number): string => `h-${key}-${i}`
 /** The DOM id of a range card's header button. */
 export const rangeHeaderId = (key: string, i: number): string => `range-${key}-${i}-hdr`
+/** The DOM id of the row that opens slot `s` of range `i`. */
+export const slotRowId = (key: string, i: number, s: number): string => `slot-${key}-${i}-${s}`
 /** The DOM id of a range card's ⋯ button. */
 export const rangeMenuId = (key: string, i: number): string => `range-${key}-${i}-btn`
 /** The DOM id of a strand's ⋯ button. */
