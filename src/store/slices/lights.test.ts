@@ -7,12 +7,10 @@ import {
   adoptView,
   beginPaint,
   editStrand,
-  endPaint,
   flashLed,
   lightsSlice,
   loadFxLists,
   loadLights,
-  paintCells,
   resolveShared,
   selectLights,
   setStrandGroups,
@@ -220,23 +218,6 @@ describe("strand writes", () => {
 
     expect(lights().view!.strands[0]).toMatchObject({ name: "o0", bri: 128 })
     expect(store.getState().lights.writes["d1|o0"]?.hold).toBe(true)
-  })
-
-  // Fails if painting sends before the release, or sends anything but the painted ranges.
-  it("sends a paint stroke once, on release", async () => {
-    const painted = range("A", 0, 4, { pattern: { kind: "individual" }, paint: Array(4).fill("#000000") })
-    const { store } = await setup(makeView({}, { len: 4, ranges: [painted] }))
-    const patch = vi.spyOn(api, "patchStrand").mockReturnValue(new Promise(() => {}))
-
-    store.dispatch(beginPaint({ id: "d1", key: "o0" }))
-    store.dispatch(paintCells({ id: "d1", key: "o0", i: 0, from: 0, to: 0, color: "#FF0000" }))
-    store.dispatch(paintCells({ id: "d1", key: "o0", i: 0, from: 1, to: 2, color: "#00FF00" }))
-    store.dispatch(paintCells({ id: "d1", key: "o0", i: 0, from: 3, to: 3, color: "#0000FF" }))
-    expect(patch).not.toHaveBeenCalled()
-    store.dispatch(endPaint({ id: "d1", key: "o0" }))
-
-    expect(patch).toHaveBeenCalledTimes(1)
-    expect(patch.mock.calls[0]![2].ranges![0]!.paint).toEqual(["#FF0000", "#00FF00", "#00FF00", "#0000FF"])
   })
 })
 

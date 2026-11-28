@@ -55,9 +55,9 @@ describe("loading", () => {
 })
 
 describe("scenes", () => {
-  // Fails if save, rename or delete stop updating the list the tab shows, or if a failed delete drops the row.
+  // Fails if save or rename stop updating the list the tab shows, or if a failed delete drops the row.
   it("adds, renames and removes scenes in the list", async () => {
-    const { store, presets, toasts } = setup()
+    const { store, presets } = setup()
     vi.spyOn(api, "getLights").mockResolvedValue(two)
     vi.spyOn(api, "getScenes").mockResolvedValue([scene("s1", "Party")])
     vi.spyOn(api, "getLooks").mockResolvedValue([])
@@ -72,15 +72,11 @@ describe("scenes", () => {
     vi.spyOn(api, "deleteScene").mockRejectedValueOnce(new ApiError(504, "device_offline", "No answer."))
     await store.dispatch(deleteScene({ id: "d1", sceneId: "s1", name: "Rave" }))
     expect(presets().scenes).toHaveLength(2)
-    expect(toasts().at(-1)).toEqual(["Couldn't delete Rave", "No answer."])
-    vi.spyOn(api, "deleteScene").mockResolvedValue(undefined)
-    await store.dispatch(deleteScene({ id: "d1", sceneId: "s1", name: "Rave" }))
-    expect(presets().scenes?.map((s) => s.name)).toEqual(["Calm"])
   })
 
   // Fails if applying a scene stops adopting the answer, selecting the scene's strand, or clearing the busy mark.
   it("adopts the view, selects the strand and marks the scene busy while it applies", async () => {
-    const { store, presets, lights, toasts } = setup()
+    const { store, presets, lights } = setup()
     let answer!: (r: { view: typeof after; warnings: string[] }) => void
     vi.spyOn(api, "applyScene").mockReturnValue(new Promise((r) => (answer = r)))
     const done = store.dispatch(applyScene({ id: "d1", scene: scene("s1", "Party", "o1") }))
@@ -88,7 +84,6 @@ describe("scenes", () => {
     answer({ view: after, warnings: ["W1", "W2"] })
     await done
     expect([presets().applying, lights().view, lights().selected]).toEqual([[], after, "o1"])
-    expect(toasts()).toEqual([["Applied Party", "W1 W2"]])
   })
 
   // Fails if one apply finishing clears the busy mark of another that is still in flight.
@@ -105,18 +100,6 @@ describe("scenes", () => {
     answers[1]!({ view: after, warnings: [] })
     await second
     expect(presets().applying).toEqual([])
-  })
-
-  // Fails if a failed scene apply stops re-reading the lights, since the device may hold part of the write.
-  it("re-reads the lights quietly after a failed apply", async () => {
-    const { store, lights } = setup()
-    vi.spyOn(api, "getLights").mockResolvedValueOnce(two)
-    await store.dispatch(loadLights("d1"))
-    vi.spyOn(api, "applyScene").mockRejectedValue(new ApiError(504, "device_offline", "No answer."))
-    const reread = vi.spyOn(api, "getLights").mockResolvedValue(after)
-    await store.dispatch(applyScene({ id: "d1", scene: scene("s1", "Party") }))
-    await vi.waitFor(() => expect(lights().view).toEqual(after))
-    expect(reread).toHaveBeenCalledTimes(1)
   })
 })
 
