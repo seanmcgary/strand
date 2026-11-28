@@ -1,4 +1,4 @@
-import { cutBytes, NAME_BYTES, PAINT_TAG, segmentName } from "../../shared/segmentName";
+import { cutBytes, HEX_COLOR, MAX_EVERY, NAME_BYTES, NAME_CHARS, PAINT_TAG, segmentName } from "../../shared/segmentName";
 import type { LightsView, Pattern, RangeView, SlotView, StrandView, WledConfig } from "../../shared/apiTypes";
 
 /**
@@ -46,10 +46,7 @@ export const paintKey = (start: number, name: string): string => `${start}:${nam
 export type Lists = { effects: string[]; palettes: string[] };
 
 export const FLASH_NAME = "Strand flash";
-export { NAME_BYTES, PAINT_TAG, segmentName };
-
-const NAME_CHARS = 64;
-const MAX_EVERY = 16;
+export { PAINT_TAG, segmentName };
 
 type Json = Record<string, unknown>;
 
@@ -57,9 +54,8 @@ export const isObject = (v: unknown): v is Json => typeof v === "object" && v !=
 export const isInt = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v);
 const intIn = (v: unknown, min: number, max: number, dflt: number): number => (isInt(v) && v >= min && v <= max ? v : dflt);
 const bool = (v: unknown): boolean => (typeof v === "boolean" ? v : false);
-const isColor = (v: unknown): v is number[] => Array.isArray(v) && (v.length === 3 || v.length === 4) && v.every((c) => intIn(c, 0, 255, -1) >= 0);
+export const isColor = (v: unknown): v is number[] => Array.isArray(v) && (v.length === 3 || v.length === 4) && v.every((c) => intIn(c, 0, 255, -1) >= 0);
 const hex = (rgb: number[]): string => `#${rgb.slice(0, 3).map((c) => c.toString(16).padStart(2, "0")).join("").toUpperCase()}`;
-const HEX_COLOR = /^#[0-9A-F]{6}$/;
 
 /** The longest prefix of `s` with at most `max` UTF-16 units, cut between code points. */
 function cutChars(s: string, max: number): string {
@@ -291,13 +287,13 @@ function candidates(inside: WledSeg[], paint: PaintMap): Candidate[] {
   }
 
   for (const seg of inside) {
-    const m = /^(.*) paint$/.exec(seg.n ?? "");
-    if (used.has(seg.id) || !m || !seg.frz || seg.grp !== 1 || seg.spc !== 0) continue;
+    const base = seg.n?.endsWith(PAINT_TAG) ? seg.n.slice(0, -PAINT_TAG.length) : undefined;
+    if (used.has(seg.id) || base === undefined || !seg.frz || seg.grp !== 1 || seg.spc !== 0) continue;
     used.add(seg.id);
     const len = seg.stop - seg.start;
     const known = paint[paintKey(seg.start, seg.n!)];
-    const colors = Array.isArray(known) && known.length === len && known.every((c) => HEX_COLOR.test(c)) ? [...known] : Array<string>(len).fill(hex(seg.col[0]!));
-    out.push({ name: nameOf(m[1]), start: seg.start, stop: seg.stop, pattern: { kind: "individual" }, segs: [seg], paint: colors, normalize: seg.of !== 0 });
+    const colors = Array.isArray(known) && known.length === len && known.every((c) => HEX_COLOR.test(c)) ? known.map((c) => c.toUpperCase()) : Array<string>(len).fill(hex(seg.col[0]!));
+    out.push({ name: nameOf(base), start: seg.start, stop: seg.stop, pattern: { kind: "individual" }, segs: [seg], paint: colors, normalize: seg.of !== 0 });
   }
 
   const buckets = new Map<string, WledSeg[]>();

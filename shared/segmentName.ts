@@ -2,6 +2,12 @@
 export const PAINT_TAG = " paint";
 /** The firmware's segment name limit on ESP8266 (`const.h:175-180`), the stricter one. */
 export const NAME_BYTES = 32;
+/** The most characters in a range or strand name. */
+export const NAME_CHARS = 64;
+/** The most segments an Every pattern may spread over. */
+export const MAX_EVERY = 16;
+/** A paint color, as the browser sends it. */
+export const HEX_COLOR = /^#[0-9A-Fa-f]{6}$/;
 
 const encoder = new TextEncoder();
 

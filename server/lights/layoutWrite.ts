@@ -1,6 +1,7 @@
 import type { RangeView, SlotView, StrandPatch } from "../../shared/apiTypes";
 import { messages } from "../errors";
-import { encodePaint, FLASH_NAME, isInt, readStrand, segmentName, type Lists, type PaintMap, type Strand, type WledSeg, type WledState } from "./layoutRead";
+import { HEX_COLOR, MAX_EVERY, NAME_CHARS } from "../../shared/segmentName";
+import { encodePaint, FLASH_NAME, isColor, isInt, readStrand, segmentName, type Lists, type PaintMap, type Strand, type WledSeg, type WledState } from "./layoutRead";
 
 /**
  * Writes a strand's layout as WLED segments (spec §6.2 "Writing a layout").
@@ -16,28 +17,20 @@ export type LayoutErrorCode = "segment_budget" | "invalid_layout" | "shared" | "
 export class LayoutError extends Error {
   code: LayoutErrorCode;
   need?: number;
-  free?: number;
 
-  constructor(code: LayoutErrorCode, message: string, budget?: { need: number; free: number }) {
+  constructor(code: LayoutErrorCode, message: string, budget?: { need: number }) {
     super(message);
     this.name = "LayoutError";
     this.code = code;
-    if (budget) {
-      this.need = budget.need;
-      this.free = budget.free;
-    }
+    if (budget) this.need = budget.need;
   }
 }
 
-const NAME_CHARS = 64;
-const MAX_EVERY = 16;
-const HEX_COLOR = /^#[0-9A-Fa-f]{6}$/;
 const BYTE_FIELDS = ["sx", "ix", "c1", "c2", "pal"] as const;
 const SLOT_NUMBERS = ["fx", "sx", "ix", "c1", "c2", "c3", "pal"] as const;
 const SLOT_FLAGS = ["o1", "o2", "o3"] as const;
 
 const intIn = (v: unknown, min: number, max: number): boolean => isInt(v) && v >= min && v <= max;
-const isColor = (v: unknown): boolean => Array.isArray(v) && (v.length === 3 || v.length === 4) && v.every((c) => intIn(c, 0, 255));
 const samePattern = (a: RangeView["pattern"], b: RangeView["pattern"]): boolean =>
   a.kind === b.kind && (a.kind !== "every" || (b.kind === "every" && a.n === b.n && a.group === b.group));
 
@@ -284,11 +277,10 @@ export function writeStrand(
   const p = plan(state, strand, next, lists, paint, opts);
   const need = p.creates.length - p.removed.length;
   const free = maxseg - state.seg.length;
-  if (need > free) throw new LayoutError("segment_budget", messages.segmentBudget(need, free), { need, free });
+  if (need > free) throw new LayoutError("segment_budget", messages.segmentBudget(need, free), { need });
 
   return { seg: requestsFor(state, p.removed, p.creates, p.patches), paint: p.paint };
 }
-
 
 const overlapsSpan = (s: { start: number; stop: number }, o: { start: number; len: number }): boolean => s.start < o.start + o.len && o.start < s.stop;
 const SLOT_KEYS = ["on", "bri", "col", "fx", "sx", "ix", "c1", "c2", "c3", "o1", "o2", "o3", "pal"] as const;
@@ -308,7 +300,7 @@ export function splitShared(state: WledState, touched: Strand[], maxseg: number)
   const creates = touched.slice(1).map(bodyOf);
   const need = creates.length - removed.length;
   const free = maxseg - state.seg.length;
-  if (need > free) throw new LayoutError("segment_budget", messages.segmentBudget(need, free), { need, free });
+  if (need > free) throw new LayoutError("segment_budget", messages.segmentBudget(need, free), { need });
   return { seg: requestsFor(state, removed, creates, [{ id: first.id, ...bodyOf(touched[0]!) }]), paint: [] };
 }
 

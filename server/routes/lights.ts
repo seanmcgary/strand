@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { LightsPatch, LightsView, StrandPatch } from "../../shared/apiTypes";
+import { NAME_CHARS } from "../../shared/segmentName";
 import type { ServerDeps } from "../app";
 import { ApiError, messages } from "../errors";
 import * as preferences from "../db/preferences";
@@ -103,7 +104,6 @@ const namesBody = {
     },
   },
 } as const;
-const NAME_CHARS = 64;
 
 export async function lightsRoutes(app: FastifyInstance, deps: ServerDeps): Promise<void> {
   app.get<{ Params: { id: string } }>(

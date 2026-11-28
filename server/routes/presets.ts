@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { ApplyResult, LookRecord, LookTarget, Scene } from "../../shared/apiTypes";
 import { briToPct } from "../../shared/brightness";
+import { NAME_CHARS } from "../../shared/segmentName";
 import type { ServerDeps } from "../app";
 import * as looks from "../db/looks";
 import * as scenes from "../db/scenes";
@@ -11,7 +12,6 @@ import { lookFromRange, lookToPatches, sceneToPatch, snapshotStrand } from "../l
 import { STRAND_KEY } from "./lights";
 import { loadDevice } from "./settings";
 
-const NAME_CHARS = 64;
 const MAX_SCENES = 256;
 const MAX_LOOKS = 256;
 const MAX_CONTENT_BYTES = 65536;
@@ -220,7 +220,7 @@ export async function presetsRoutes(app: FastifyInstance, deps: ServerDeps): Pro
         try {
           const need = patches.reduce((sum, p) => sum + segmentsNeeded(d.state, d.strands.find((s) => s.key === p.key)!, p.next, d.lists, d.paint), 0);
           const free = d.view.segments.max - d.state.seg.length;
-          if (need > free) throw new LayoutError("segment_budget", messages.segmentBudget(need, free), { need, free });
+          if (need > free) throw new LayoutError("segment_budget", messages.segmentBudget(need, free), { need });
           // One strand at a time, each against the device as the last write left it.
           for (const { key, next } of patches) {
             const strand = d.strands.find((s) => s.key === key)!;
