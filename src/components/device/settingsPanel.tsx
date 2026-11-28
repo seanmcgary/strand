@@ -1,5 +1,6 @@
 import type { Device } from "../../../shared/apiTypes"
 import { Icon } from "@/components/ui/icon"
+import { wledSettingsUrl } from "@/lib/utils"
 
 const ADVANCED_ONLY = [
   "Time, sunrise and schedules",
@@ -17,7 +18,7 @@ const LINK_BUTTON =
 
 /** The Settings tab: until Strand has its own settings screens, a link to the device's WLED settings pages. */
 export function SettingsPanel({ device }: { device: Device }) {
-  const url = `http://${device.host}/settings`
+  const url = wledSettingsUrl(device)
   return (
     <div>
       <div className="mb-4 flex flex-col gap-1">

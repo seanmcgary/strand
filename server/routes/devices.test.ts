@@ -196,14 +196,14 @@ describe("POST /api/devices/probe", () => {
 });
 
 describe("POST /api/devices", () => {
-  // Fails if add saves the address the device reports instead of the one reached, or lets a second add through.
+  // Fails if add saves the address the device reports instead of the one reached, drops the port from the answer, or lets a second add through.
   it("adds a device with the reached address, then rejects the same device", async () => {
     const t = makeTestApp();
     const f = await fake(seeds.backyard);
     const payload = { host: `127.0.0.1:${f.port}` };
     const res = await t.inject({ method: "POST", url: "/api/devices", payload });
     expect(res.statusCode).toBe(201);
-    expect(res.json<Device>()).toMatchObject({ name: "Backyard", lastIp: "127.0.0.1", online: true, pinLocked: false });
+    expect(res.json<Device>()).toMatchObject({ name: "Backyard", lastIp: "127.0.0.1", port: f.port, online: true, pinLocked: false });
     const row = devices.getByMac(t.db, seeds.backyard.info.mac)!;
     expect(row).toMatchObject({ lastIp: "127.0.0.1", port: f.port });
     expect(seeds.backyard.info.ip).not.toBe("127.0.0.1");

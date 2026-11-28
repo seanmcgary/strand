@@ -8,6 +8,8 @@ export interface Device {
   id: string;
   name: string;
   host: string;
+  /** The device's HTTP port, 80 unless it was added as `host:port`. */
+  port: number;
   lastIp: string;
   mac: string;
   online: boolean;

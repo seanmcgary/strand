@@ -1,5 +1,6 @@
 import { clsx, type ClassValue } from "clsx"
 import { twMerge } from "tailwind-merge"
+import type { Device } from "../../shared/apiTypes"
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
@@ -29,4 +30,9 @@ export function relativeTime(iso: string, now: number): string {
   if (diff < 3600) return `${Math.max(1, Math.round(diff / 60))}\u00A0min\u00A0ago`
   if (diff < 86400) return `${Math.round(diff / 3600)}\u00A0h\u00A0ago`
   return `${Math.round(diff / 86400)}\u00A0d\u00A0ago`
+}
+
+/** The device's stock WLED settings page, with its port unless it is 80. */
+export function wledSettingsUrl(d: Device): string {
+  return `http://${d.host}${d.port === 80 ? "" : `:${d.port}`}/settings`
 }

@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button"
 import { Icon } from "@/components/ui/icon"
 import { Skeleton } from "@/components/ui/skeleton"
 import { freeSegs, handleId, mergeInto, nextRangeName, rangeHeaderId, slotRowId, splitRange } from "@/lights/model"
-import { cn } from "@/lib/utils"
+import { cn, wledSettingsUrl } from "@/lib/utils"
 import type { ThunkError } from "@/store/createApiThunk"
 import type { DeviceLights } from "@/store/slices/lights"
 import type { PreferencesState } from "@/store/slices/preferences"
@@ -131,7 +131,7 @@ function Unsupported({ device, title }: { device: Device; title: string }) {
     <div className={cn(CARD, PANEL_CENTER)}>
       <Icon name="info" className="size-5 text-muted-foreground" />
       <p className="font-medium">{title}</p>
-      <a href={`http://${device.host}/settings`} target="_blank" rel="noreferrer" className={LINK_BUTTON}>
+      <a href={wledSettingsUrl(device)} target="_blank" rel="noreferrer" className={LINK_BUTTON}>
         <Icon name="external-link" />
         Open WLED Advanced UI
       </a>

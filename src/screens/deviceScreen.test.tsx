@@ -21,6 +21,7 @@ const backyard: Device = {
   id: "d1",
   name: "Backyard",
   host: "wled-backyard.local",
+  port: 80,
   lastIp: "192.168.1.40",
   mac: "aabbccddeeff",
   online: true,
@@ -147,6 +148,18 @@ it("selects Settings on the settings path and links to the WLED settings page", 
   const link = screen.getByRole("link", { name: "Open WLED Advanced UI" })
   expect(link.getAttribute("href")).toBe("http://wled-backyard.local/settings")
   expect(link.getAttribute("target")).toBe("_blank")
+})
+
+// Fails if an Advanced UI link drops a port other than 80 from the device's address.
+it("keeps the device's port in both Advanced UI links", async () => {
+  devices = [{ ...backyard, port: 8080 }]
+  override = (method, path) => (method === "GET" && path === "/api/devices/d1/lights" ? { status: 200, body: { ...view, matrix: true } } : undefined)
+  await open("/devices/d1")
+  expect(screen.getByRole("link", { name: "Open WLED Advanced UI" }).getAttribute("href")).toBe("http://wled-backyard.local:8080/settings")
+  cleanup()
+  await open("/devices/d1/settings")
+  expect(screen.getByRole("link", { name: "Open WLED Advanced UI" }).getAttribute("href")).toBe("http://wled-backyard.local:8080/settings")
+  expect(screen.getByText("http://wled-backyard.local:8080/settings")).toBeTruthy()
 })
 
 // Fails if the Lights tab loads are not sent when it opens, or are not sent again when the user comes back to it.

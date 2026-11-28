@@ -8,6 +8,7 @@ const device: Device = {
   id: "d1",
   name: "Porch",
   host: "porch.local",
+  port: 80,
   lastIp: "10.0.0.2",
   mac: "aa:bb",
   online: true,

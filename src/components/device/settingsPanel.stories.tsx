@@ -11,6 +11,7 @@ export const Default: Story = {
       id: "d1",
       name: "Backyard",
       host: "wled-backyard.local",
+      port: 80,
       lastIp: "192.168.1.40",
       mac: "aabbccddeeff",
       online: true,

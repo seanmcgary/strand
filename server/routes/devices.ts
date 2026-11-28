@@ -57,6 +57,7 @@ export function toDevice(row: DeviceRow, live: { online: boolean; locked: boolea
     id: row.id,
     name: row.name,
     host: row.host,
+    port: row.port,
     lastIp: row.lastIp,
     mac: row.mac,
     online: live.online,
