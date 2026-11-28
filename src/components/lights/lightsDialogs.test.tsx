@@ -182,3 +182,32 @@ it("shows the outputs error with Try again", async () => {
   await flush()
   expect(within(dialog).getByText("Middle")).toBeTruthy()
 })
+
+// Fails if a strand whose outputs are missing from the device's config crashes the Separate dialog instead of showing Try again.
+it("shows the changed-outputs error when the device has fewer outputs than the strand", async () => {
+  await open(joined)
+  replies["GET /api/devices/d1/config"] = { status: 200, body: { hw: { led: { ins: [config.hw.led.ins[0]] } } } }
+  const dialog = openSeparate()
+  await flush()
+  expect(within(dialog).getByRole("alert").textContent).toBe("The LED outputs changed. Try again.")
+  expect((within(dialog).getByRole("button", { name: "Separate" }) as HTMLButtonElement).disabled).toBe(true)
+  expect(within(dialog).getByRole("button", { name: "Try again" })).toBeTruthy()
+})
+
+// Fails if confirming Separate stops sending the group list without the key, closing the dialog, or toasting.
+it("separates the strand and toasts", async () => {
+  await open(joined)
+  const two = view([
+    strand("o0", "Strand 1", 150, [allRange("Left", 0, 150)]),
+    strand("o1", "Strand 2", 150, [allRange("Right", 150, 150)], { start: 150, pins: [4] }),
+  ])
+  replies["GET /api/devices/d1/config"] = { status: 200, body: config }
+  replies["PUT /api/devices/d1/strand-groups"] = { status: 200, body: two }
+  const dialog = openSeparate()
+  await flush()
+  fireEvent.click(within(dialog).getByRole("button", { name: "Separate" }))
+  await flush()
+  expect(calls.find((c) => c.method === "PUT")).toEqual({ method: "PUT", path: "/api/devices/d1/strand-groups", body: { keys: [] } })
+  expect(screen.queryByRole("dialog")).toBeNull()
+  expect(screen.getByText("Strands separated")).toBeTruthy()
+})

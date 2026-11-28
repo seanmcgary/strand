@@ -21,7 +21,6 @@ export const LOCKED = "Choose Split by strand or Combine strands first."
 
 const MAX_SLOTS = 16
 const MAX_GROUP = 255
-const NAME_CHARS = 64
 
 export const rgbOf = (hex: string): number[] => {
   const n = parseInt(hex.replace("#", ""), 16)
@@ -143,12 +142,10 @@ export function nextRangeName(ranges: RangeView[]): string {
   return `Range ${n}`
 }
 
-/** Why `name` cannot name range `i`, or null. */
-export function nameError(ranges: RangeView[], i: number, name: string): string | null {
-  const chars = [...name.trim()].length
-  if (chars < 1 || chars > NAME_CHARS) return "A name needs 1 to 64 characters."
+/** Whether another range than `i` already has this name. */
+export function nameTaken(ranges: RangeView[], i: number, name: string): boolean {
   const kept = keptName(name)
-  return ranges.some((r, k) => k !== i && keptName(r.name) === kept) ? "Another range has this name." : null
+  return ranges.some((r, k) => k !== i && keptName(r.name) === kept)
 }
 
 export function newSlot(slots: SlotView[]): SlotView {
@@ -263,11 +260,13 @@ export function adjacentPairs(view: { strands: StrandView[] }): [StrandView, Str
 }
 
 /** Names of the ranges that run across a join between the outputs of a combined strand. */
-export function cutRanges(ins: LedOutput[], st: StrandView): string[] {
-  const joins = st.key
+export function cutRanges(ins: LedOutput[], st: StrandView): string[] | null {
+  const outs = st.key
   .split("+")
   .slice(1)
-  .map((k) => ins[Number(k.slice(1))]!.start - st.start)
+  .map((k) => ins[Number(k.slice(1))])
+  if (outs.some((o) => !o)) return null
+  const joins = outs.map((o) => o!.start - st.start)
   return st.ranges.filter((r) => joins.some((j) => r.start < j && j < r.start + r.len)).map((r) => r.name)
 }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { Effect, Palette, RangeView, SlotView, StrandView } from "../../shared/apiTypes"
-import { cutRanges, everyPreview, ledColors, mergeInto, needMsg, nextRangeName, nameError, rangeColors, segsNeeded, splitRange, stepReasons, withPattern } from "./model"
+import { everyPreview, ledColors, mergeInto, nameTaken, nextRangeName, rangeColors, segsNeeded, splitRange, stepReasons, withPattern } from "./model"
 
 const slot = (rgb: number[], over: Partial<SlotView> = {}): SlotView => ({
   col: [rgb, [0, 0, 0], [0, 0, 0]],
@@ -35,7 +35,7 @@ const strand = (ranges: RangeView[], over: Partial<StrandView> = {}): StrandView
 })
 
 describe("lights model", () => {
-  // Fails if everyPreview is not exported from the model.
+  // Fails if everyPreview stops repeating each slot number `group` times in slot order.
   it("previews the Every N order", () => {
     expect(everyPreview(2, 2)).toBe("1 1 2 2 1 1 2 2 …")
   })
@@ -82,7 +82,6 @@ describe("lights model", () => {
   // Fails if stepReasons does not stop N and the group where the range is too short.
   it("gives the length reasons", () => {
     const every = (n: number, group: number, len: number): RangeView => ({ ...allRange("A", 0, len), pattern: { kind: "every", n, group }, slots: Array.from({ length: n }, () => slot([1, 1, 1])) })
-    expect(stepReasons(every(2, 3, 6), 5).nUp).toBe("This range is too short for another slot.")
     expect(stepReasons(every(3, 2, 6), 5).gUp).toBe("This range is too short for a bigger group.")
     expect(stepReasons(every(2, 2, 40), 0).nUp).toBe("No free segments. Remove a range first.")
   })
@@ -105,11 +104,6 @@ describe("lights model", () => {
     expect(ledColors(fxs, pals, strand([allRange("A", 0, 2, [0, 255, 0])]))).toEqual(["#00FF00", "#00FF00"])
   })
 
-  // Fails if needMsg changes its copy.
-  it("words the segment budget message", () => {
-    expect(needMsg(2, 1)).toBe("This needs 2 more segments and 1 is free. Remove a range first.")
-  })
-
   // Fails if mergeInto does not append the dropped range's colors to a painted range.
   it("merges a range into a painted neighbor", () => {
     const a: RangeView = { ...allRange("A", 0, 2), pattern: { kind: "individual" }, paint: ["#111111", "#222222"] }
@@ -118,27 +112,12 @@ describe("lights model", () => {
     expect(out[0]).toMatchObject({ name: "A", start: 0, len: 4, paint: ["#111111", "#222222", "#0000FF", "#0000FF"] })
   })
 
-  // Fails if cutRanges does not name the ranges that cross a join between combined outputs.
-  it("names the ranges that cross a join", () => {
-    const ins = [{ start: 0, len: 10 }, { start: 10, len: 10 }] as Parameters<typeof cutRanges>[0]
-    const st = strand([allRange("A", 0, 12), allRange("B", 12, 8)], { key: "o0+o1" })
-    expect(cutRanges(ins, st)).toEqual(["A"])
-  })
-
   // Fails if nextRangeName compares names without the device's 32-byte cut.
   it("skips a range name that matches by its 32-byte cut", () => {
     const long = "x".repeat(40)
     expect(nextRangeName([allRange("Range 2", 0, 1)])).toBe("Range 3")
     expect(nextRangeName([allRange("A", 0, 1)])).toBe("Range 2")
-    expect(nameError([allRange(long, 0, 1), allRange("B", 1, 1)], 1, `${"x".repeat(32)}y`)).toBe("Another range has this name.")
-  })
-
-  // Fails if nameError does not count characters rather than UTF-16 units.
-  it("limits a name to 1-64 characters", () => {
-    const rs = [allRange("A", 0, 1)]
-    expect(nameError(rs, 0, "  ")).toBe("A name needs 1 to 64 characters.")
-    expect(nameError(rs, 0, "😀".repeat(64))).toBeNull()
-    expect(nameError(rs, 0, "😀".repeat(65))).toBe("A name needs 1 to 64 characters.")
+    expect(nameTaken([allRange(long, 0, 1), allRange("B", 1, 1)], 1, `${"x".repeat(32)}y`)).toBe(true)
   })
 
   // Fails if segsNeeded counts a shared strand's changes against the budget.

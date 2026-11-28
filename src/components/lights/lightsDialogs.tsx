@@ -5,7 +5,7 @@ import { CancelButton, DialogShell, Spinner } from "@/components/dialogShell"
 import { Button } from "@/components/ui/button"
 import { DialogFooter } from "@/components/ui/dialog"
 import { Skeleton } from "@/components/ui/skeleton"
-import { adjacentPairs, COMBINE_BUTTON_ID, cutRanges, nameError, pinLabel, rangeMenuId, strandMenuId } from "@/lights/model"
+import { adjacentPairs, COMBINE_BUTTON_ID, cutRanges, nameTaken, pinLabel, rangeMenuId, strandMenuId } from "@/lights/model"
 import { FORM_DESCRIPTION, FORM_MESSAGE, INPUT, LABEL } from "@/lib/dialogStyles"
 import { cn } from "@/lib/utils"
 import type { ThunkError } from "@/store/createApiThunk"
@@ -68,7 +68,7 @@ function rangeNameError(st: StrandView, i: number, name: string): string | null 
   const t = name.trim()
   if (!t) return "A range needs a name."
   if ([...t].length > 64) return "Use 64 characters or fewer."
-  return nameError(st.ranges, i, t) ? "Another range on this strand has that name." : null
+  return nameTaken(st.ranges, i, t) ? "Another range on this strand has that name." : null
 }
 
 function RenameView(p: RenameProps & RenameState & { onSubmit: (e: FormEvent) => void }) {
@@ -264,6 +264,7 @@ function CutList({ cut }: { cut: string[] }) {
 
 function SeparateView(p: SeparateProps & SeparateState & { onConfirm: () => void }) {
   const cut = p.outputsStatus === "ok" && p.outputs ? cutRanges(p.outputs, p.strand) : null
+  const stale = p.outputsStatus === "ok" && !!p.outputs && cut === null
   return (
     <Shell
       dialog={p.dialog}
@@ -273,10 +274,10 @@ function SeparateView(p: SeparateProps & SeparateState & { onConfirm: () => void
     >
       {cut ? (
         <CutList cut={cut} />
-      ) : p.outputsStatus === "error" ? (
+      ) : p.outputsStatus === "error" || stale ? (
         <div className="flex flex-col items-start gap-3">
           <p role="alert" className="text-sm text-danger">
-            {p.outputsError?.message ?? ""}
+            {stale ? "The LED outputs changed. Try again." : (p.outputsError?.message ?? "")}
           </p>
           <Button type="button" variant="outline" size="sm" leadingIcon="rotate-cw" onClick={p.onRetryOutputs}>
             Try again
