@@ -21,7 +21,6 @@ function returnTarget(d: PresetsDialog): HTMLElement | null {
   }
 }
 
-
 interface ShellProps {
   dialog: PresetsDialog
   onClose: () => void

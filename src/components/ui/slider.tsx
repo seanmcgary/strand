@@ -51,7 +51,7 @@ export function Slider({
         <span className="absolute h-full bg-primary" style={{ width: `${pct}%` }} />
       </span>
       <span
-        className="pointer-events-none absolute top-1/2 block h-5 w-5 -translate-y-1/2 rounded-full border-2 border-primary bg-background shadow transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-ring peer-disabled:opacity-50"
+        className="pointer-events-none absolute top-1/2 block h-5 w-5 -translate-y-1/2 rounded-full border-2 border-primary bg-background shadow transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-ring peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-background peer-disabled:opacity-50"
         style={{ left: `calc(${pct}% - ${(pct / 100) * 20}px)` }}
       />
     </div>

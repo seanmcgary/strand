@@ -89,11 +89,11 @@ function ApplyLookView(p: ApplyProps) {
               {st.shared ? (
                 <p id={`${sid}-reason`} className="ml-7 mt-1 text-[13px] text-muted-foreground">Shares a segment with another strand. Choose Split or Combine on the Lights tab first.</p>
               ) : (
-                <ul role="group" aria-label={`${st.name} ranges`} className="ml-7 mt-2.5 flex flex-col gap-2.5">
+                <div role="group" aria-label={`${st.name} ranges`} className="ml-7 mt-2.5 flex flex-col gap-2.5">
                   {st.ranges.map((r, i) => {
                     const on = !!p.checked[rangeKey(st.key, r.name)]
                     return (
-                      <li key={i} className="flex items-center gap-2.5">
+                      <div key={i} className="flex items-center gap-2.5">
                         <button type="button" role="checkbox" id={`${sid}-${i}`} className={CHECKBOX} aria-checked={on} onClick={() => p.onRange(st.key, r.name)}>
                           <Tick state={on ? "true" : "false"} />
                         </button>
@@ -103,10 +103,10 @@ function ApplyLookView(p: ApplyProps) {
                             · {rangeLabel(r)} · {patternText(r.pattern)}
                           </span>
                         </label>
-                      </li>
+                      </div>
                     )
                   })}
-                </ul>
+                </div>
               )}
             </li>
           )
