@@ -4,7 +4,7 @@ import type { ServerDeps } from "../app";
 import * as looks from "../db/looks";
 import * as scenes from "../db/scenes";
 import { ApiError, messages } from "../errors";
-import { clearLeftovers, deviceError, readDeviceLights, writeLayout, type DeviceLights } from "../lights/deviceLights";
+import { deviceError, readDeviceLights, refuseMatrix, writeLayout } from "../lights/deviceLights";
 import { LayoutError, segmentsNeeded, writeStrand } from "../lights/layoutWrite";
 import { lookFromRange, lookToPatches, sceneToPatch, snapshotStrand } from "../lights/snapshots";
 import { loadDevice } from "./settings";
@@ -100,7 +100,9 @@ export async function presetsRoutes(app: FastifyInstance, deps: ServerDeps): Pro
       const row = loadDevice(deps, request.params.id);
       const name = checkedName(request.body.name);
       if (scenes.count(deps.db, row.id) >= MAX_SCENES) throw new ApiError(422, "too_many", messages.tooManyScenes());
-      const view = (await readDeviceLights(deps, row)).view.strands.find((s) => s.key === request.body.strandKey);
+      const d = await readDeviceLights(deps, row);
+      refuseMatrix(d);
+      const view = d.view.strands.find((s) => s.key === request.body.strandKey);
       if (!view) throw new ApiError(409, "strand_changed", messages.strandChanged());
       const content = snapshotStrand(view);
       if (Buffer.byteLength(JSON.stringify(content)) > MAX_CONTENT_BYTES) throw new ApiError(422, "invalid_layout", messages.contentTooLarge());
@@ -131,18 +133,18 @@ export async function presetsRoutes(app: FastifyInstance, deps: ServerDeps): Pro
     async (request): Promise<ApplyResult> => {
       const row = loadDevice(deps, request.params.id);
       const scene = sceneOf(row.id, request.params.sceneId);
-      const d = await clearLeftovers(deps, await readDeviceLights(deps, row));
-      const strand = d.strands.find((s) => s.key === scene.strandKey);
-      const view = d.view.strands.find((s) => s.key === scene.strandKey);
-      if (!strand || !view) throw new ApiError(409, "strand_changed", messages.strandChanged());
-      if (view.shared) throw new ApiError(409, "shared", messages.shared(view.name));
-      try {
-        const { next, warnings } = sceneToPatch(scene.content, scene.ledCount, strand, d.lists);
-        const write = writeStrand(d.state, strand, next, d.lists, d.paint, d.view.segments.max);
-        return { view: (await writeLayout(deps, d, write)).view, warnings };
-      } catch (err) {
-        throw err instanceof LayoutError ? deviceError(err, strand.name) : err;
-      }
+      return writeLayout(deps, row, async (d, send) => {
+        const strand = d.strands.find((s) => s.key === scene.strandKey);
+        const view = d.view.strands.find((s) => s.key === scene.strandKey);
+        if (!strand || !view) throw new ApiError(409, "strand_changed", messages.strandChanged());
+        if (view.shared) throw new ApiError(409, "shared", messages.shared(view.name));
+        try {
+          const { next, warnings } = sceneToPatch(scene.content, scene.ledCount, strand, d.lists);
+          return { view: (await send(writeStrand(d.state, strand, next, d.lists, d.paint, d.view.segments.max))).view, warnings };
+        } catch (err) {
+          throw err instanceof LayoutError ? deviceError(err, strand.name) : err;
+        }
+      });
     },
   );
 
@@ -163,7 +165,9 @@ export async function presetsRoutes(app: FastifyInstance, deps: ServerDeps): Pro
       const row = loadDevice(deps, request.params.id);
       const name = checkedName(request.body.name);
       if (looks.count(deps.db, row.id) >= MAX_LOOKS) throw new ApiError(422, "too_many", messages.tooManyLooks());
-      const view = (await readDeviceLights(deps, row)).view.strands.find((s) => s.key === request.body.strandKey);
+      const d = await readDeviceLights(deps, row);
+      refuseMatrix(d);
+      const view = d.view.strands.find((s) => s.key === request.body.strandKey);
       if (!view) throw new ApiError(409, "strand_changed", messages.strandChanged());
       const range = view.ranges.find((r) => r.name === request.body.range);
       if (!range) throw new ApiError(404, "not_found", messages.rangeGone());
@@ -199,30 +203,32 @@ export async function presetsRoutes(app: FastifyInstance, deps: ServerDeps): Pro
     async (request): Promise<ApplyResult> => {
       const row = loadDevice(deps, request.params.id);
       const { look } = lookOf(row.id, request.params.lookId);
-      let d: DeviceLights = await clearLeftovers(deps, await readDeviceLights(deps, row));
-      const targets = request.body.targets.map((t) => {
-        const strand = d.view.strands.find((s) => s.key === t.strandKey);
-        if (!strand) throw new ApiError(409, "strand_changed", messages.strandChanged());
-        if (strand.shared) throw new ApiError(409, "shared", messages.shared(strand.name));
-        if (t.range !== undefined && !strand.ranges.some((r) => r.name === t.range)) throw new ApiError(404, "not_found", messages.rangeGone());
-        return { strand, range: t.range };
-      });
-      const { patches, warnings } = lookToPatches(look, targets, d.lists);
-      let name = targets[0]!.strand.name;
-      try {
-        const need = patches.reduce((sum, p) => sum + segmentsNeeded(d.state, d.strands.find((s) => s.key === p.key)!, p.next, d.lists, d.paint), 0);
-        const free = d.view.segments.max - d.state.seg.length;
-        if (need > free) throw new LayoutError("segment_budget", messages.segmentBudget(need, free), { need, free });
-        // One strand at a time, each against the device as the last write left it.
-        for (const { key, next } of patches) {
-          const strand = d.strands.find((s) => s.key === key)!;
-          name = strand.name;
-          d = await writeLayout(deps, d, writeStrand(d.state, strand, next, d.lists, d.paint, d.view.segments.max));
+      return writeLayout(deps, row, async (first, send) => {
+        let d = first;
+        const targets = request.body.targets.map((t) => {
+          const strand = d.view.strands.find((s) => s.key === t.strandKey);
+          if (!strand) throw new ApiError(409, "strand_changed", messages.strandChanged());
+          if (strand.shared) throw new ApiError(409, "shared", messages.shared(strand.name));
+          if (t.range !== undefined && !strand.ranges.some((r) => r.name === t.range)) throw new ApiError(404, "not_found", messages.rangeGone());
+          return { strand, range: t.range };
+        });
+        const { patches, warnings } = lookToPatches(look, targets, d.lists);
+        let name = targets[0]!.strand.name;
+        try {
+          const need = patches.reduce((sum, p) => sum + segmentsNeeded(d.state, d.strands.find((s) => s.key === p.key)!, p.next, d.lists, d.paint), 0);
+          const free = d.view.segments.max - d.state.seg.length;
+          if (need > free) throw new LayoutError("segment_budget", messages.segmentBudget(need, free), { need, free });
+          // One strand at a time, each against the device as the last write left it.
+          for (const { key, next } of patches) {
+            const strand = d.strands.find((s) => s.key === key)!;
+            name = strand.name;
+            d = await send(writeStrand(d.state, strand, next, d.lists, d.paint, d.view.segments.max));
+          }
+        } catch (err) {
+          throw err instanceof LayoutError ? deviceError(err, name) : err;
         }
-      } catch (err) {
-        throw err instanceof LayoutError ? deviceError(err, name) : err;
-      }
-      return { view: d.view, warnings };
+        return { view: d.view, warnings };
+      });
     },
   );
 }

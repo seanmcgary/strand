@@ -13,11 +13,10 @@ describe("device writes during a startup save", () => {
   // Fails if writeLayout does not wait for a save in flight, whose psave then puts the old layout back.
   it("a write sent while a save is in flight is not reverted", async () => {
     const s = await startLights({ startupDelayMs: 20 });
-    const d = await readDeviceLights(s.deps, s.row);
     const release = s.f.hold({ method: "GET", path: "/presets.json" });
     s.rt.afterWrite(s.row);
     await vi.waitFor(() => expect(s.f.requests.some((r) => r.path === "/presets.json")).toBe(true));
-    const write = writeLayout(s.deps, d, { seg: [[{ id: 0, start: 0, stop: 150, n: "Porch" }]], paint: [] });
+    const write = writeLayout(s.deps, s.row, (_d, send) => send({ seg: [[{ id: 0, start: 0, stop: 150, n: "Porch" }]], paint: [] }));
     await new Promise((resolve) => setTimeout(resolve, 50));
     release();
     await write;
@@ -48,10 +47,10 @@ describe("writeLayout", () => {
   it("remembers the paint before a chunk fails", async () => {
     const s = await startLights({ seed: bigSeed(16) });
     s.f.applyState({ seg: [{ id: 0, start: 0, stop: 600, n: "Big paint", frz: true }] });
-    const d = await readDeviceLights(s.deps, s.row);
     const stripes = Array.from({ length: 600 }, (_, k) => (k % 2 === 0 ? "#FF0000" : "#0000FF"));
     s.f.failNext("serverError", { method: "POST", path: "/json/state", skip: 1 });
-    await expect(writeLayout(s.deps, d, { seg: [], paint: [{ name: "Big paint", start: 0, i: encodePaint(stripes) }] })).rejects.toThrow();
+    const write = writeLayout(s.deps, s.row, (_d, send) => send({ seg: [], paint: [{ name: "Big paint", start: 0, i: encodePaint(stripes) }] }));
+    await expect(write).rejects.toThrow();
     expect(s.rt.paintFor(s.row.id)).toEqual({ "0:Big paint": stripes });
   });
 });
@@ -92,9 +91,8 @@ describe("paint requests", () => {
   it("splits a 300-LED alternating paint into requests the ESP8266 accepts", async () => {
     const s = await startLights({ seed: seeds.frontRoof });
     s.f.applyState({ seg: [{ id: 0, start: 0, stop: 300, n: "Roof paint", frz: true }] });
-    const d = await readDeviceLights(s.deps, s.row);
     const stripes = Array.from({ length: 300 }, (_, k) => (k % 2 === 0 ? "#FF0000" : "#0000FF"));
-    await writeLayout(s.deps, d, { seg: [], paint: [{ name: "Roof paint", start: 0, i: encodePaint(stripes) }] });
+    await writeLayout(s.deps, s.row, (_d, send) => send({ seg: [], paint: [{ name: "Roof paint", start: 0, i: encodePaint(stripes) }] }));
     const paintPosts = s.f.requests.filter((r) => r.method === "POST" && (r.body as { seg?: { i?: unknown } }).seg?.i !== undefined);
     expect(paintPosts.length).toBeGreaterThan(1);
     expect(s.f.pixels(0)).toEqual(stripes);

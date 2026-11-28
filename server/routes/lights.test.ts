@@ -328,6 +328,51 @@ describe("strand edit and resolve", () => {
     expect(res.json()).toEqual({ error: "segment_budget", message: "This needs 2 more segments and 1 is free. Remove a range first.", need: 2 });
   });
 
+  // Fails if a strand edit plans its segments outside the device queue, so two edits at once take the same free ID.
+  it("two strands edited at once both keep their new ranges", async () => {
+    const s = await setup();
+    await resolve(s, "split");
+    const [o0, o1] = [(await strand(s, "o0")).ranges[0]!, (await strand(s, "o1")).ranges[0]!];
+    const res = await Promise.all([
+      patch(s, { ranges: [all(o0, "A", 0, 75), all(o0, "B", 75, 75)] }, "o0"),
+      patch(s, { ranges: [all(o1, "C", 0, 75), all(o1, "D", 75, 75)] }, "o1"),
+    ]);
+    expect(res.map((r) => r.statusCode)).toEqual([200, 200]);
+    const segs = segsOf(s.f);
+    expect(segs.map((g) => [g.n, g.start, g.stop]).sort()).toEqual([["A", 0, 75], ["B", 75, 150], ["C", 150, 225], ["D", 225, 300]]);
+    expect(new Set(segs.map((g) => g.id)).size).toBe(segs.length);
+  });
+
+  // Fails if the segment budget is checked against a read made before the device queue, so two edits at once both pass it.
+  it("two strands edited at once with one free segment give one 200 and one segment_budget", async () => {
+    const s = await setup();
+    const small = Array.from({ length: 30 }, (_, k) => seg(k + 1, `S${k}`, 150 + k * 5, 155 + k * 5));
+    s.f.applyState({ seg: [seg(0, "Range 1", 0, 150), ...small] });
+    const o0 = (await strand(s, "o0")).ranges[0]!;
+    const o1 = (await strand(s, "o1")).ranges;
+    const res = await Promise.all([
+      patch(s, { ranges: [all(o0, "A", 0, 75), all(o0, "B", 75, 75)] }, "o0"),
+      patch(s, { ranges: [{ ...o1[0]!, len: 2 }, { ...o1[0]!, name: "S0b", start: 2, len: 3 }, ...o1.slice(1)] }, "o1"),
+    ]);
+    expect(res.map((r) => r.statusCode).sort()).toEqual([200, 422]);
+    expect(res.find((r) => r.statusCode === 422)!.json()).toMatchObject({ error: "segment_budget" });
+    expect(segsOf(s.f)).toHaveLength(32);
+  });
+
+  // Fails if a layout write reaches a 2D device instead of answering 422 invalid_layout.
+  it.each([
+    ["PATCH", "lights/strands/o0", { bri: 90 }],
+    ["PUT", "strand-groups", { keys: ["o0+o1"] }],
+  ])("refuses %s %s on a matrix device and writes nothing", async (method, path, payload) => {
+    const info = seeds.backyard.info;
+    const s = await setup(seeds.backyard, { infoOverride: { leds: { ...info.leds, matrix: { w: 16, h: 16 } } } });
+    const res = await s.t.inject({ method: method as "PUT", url: s.url(path), payload });
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toEqual({ error: "invalid_layout", message: "2D matrix layouts aren't supported yet." });
+    expect(posts(s.f)).toEqual([]);
+    expect(strandGroups.list(s.t.db, s.row.id)).toEqual([]);
+  });
+
   // Fails if the body schema does not reject these.
   it.each([[{}], [{ ranges: "x" }], [{ bri: 0 }], [{ on: true, x: 1 }], [{ ranges: [{ x: 1 }] }]])("rejects %j with 400", async (payload) => {
     const s = await setup();

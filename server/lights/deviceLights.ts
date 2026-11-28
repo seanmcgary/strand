@@ -127,22 +127,32 @@ export async function readDeviceLights(deps: ServerDeps, row: DeviceRow): Promis
   return { ...d, view: viewOf(deps, d, maxseg, isObject((info.leds as unknown as Json).matrix)) };
 }
 
+/** `422 invalid_layout` for a 2D device: Strand writes no layout to a matrix (spec §9). */
+export function refuseMatrix(d: DeviceLights): void {
+  if (d.view.matrix) throw new ApiError(422, "invalid_layout", messages.matrixLayout());
+}
+
 /**
  * Deletes what a read leaves in place (Plan decision 13): dropped combinations
  * from the database, and "Strand flash" segments when no flash is running.
- * With nothing to clear, it sends nothing.
+ * `deleteFlashes` decides on the flash and deletes it. With nothing to clear, it sends nothing.
  */
-export async function clearLeftovers(deps: ServerDeps, d: DeviceLights): Promise<DeviceLights> {
+async function clear(deps: ServerDeps, d: DeviceLights, deleteFlashes: () => Promise<WledState>): Promise<DeviceLights> {
   if (d.dropped.length > 0) {
     strandGroups.replace(deps.db, d.row.id, strandGroups.list(deps.db, d.row.id).filter((k) => !d.dropped.includes(k)));
   }
-  // `flashActive` is read in turn: a flash that started while this waited is not a leftover.
-  const state = d.state.seg.some((s) => s.n === FLASH_NAME)
-    ? await deps.lights.run(d.row.id, async () => (deps.lights.flashActive(d.row.id) ? d.state : deleteFlashes(deps, d.row, true)))
-    : d.state;
+  const state = d.state.seg.some((s) => s.n === FLASH_NAME) ? await deleteFlashes() : d.state;
   if (d.dropped.length === 0 && state === d.state) return d;
   const next = { ...d, state, dropped: [] };
   return { ...next, view: viewOf(deps, next, d.view.segments.max, d.view.matrix) };
+}
+
+/** `clear` outside the device queue: it takes its turn to delete the flash. */
+export async function clearLeftovers(deps: ServerDeps, d: DeviceLights): Promise<DeviceLights> {
+  // `flashActive` is read in turn: a flash that started while this waited is not a leftover.
+  return clear(deps, d, () =>
+    deps.lights.run(d.row.id, async () => (deps.lights.flashActive(d.row.id) ? d.state : deleteFlashesOf(deps, d.row, true))),
+  );
 }
 
 /**
@@ -150,7 +160,7 @@ export async function clearLeftovers(deps: ServerDeps, d: DeviceLights): Promise
  * that read. Returns the state after the delete (`reread`), or the state it read.
  * Call it inside `run`.
  */
-async function deleteFlashes(deps: ServerDeps, row: DeviceRow, reread: boolean): Promise<WledState> {
+async function deleteFlashesOf(deps: ServerDeps, row: DeviceRow, reread: boolean): Promise<WledState> {
   const target = targetOf(row);
   const state = parseState(await deviceRequest<unknown>(deps, target, "/json/state"));
   const flashes = state.seg.filter((s) => s.n === FLASH_NAME);
@@ -180,47 +190,59 @@ export async function flashLed(deps: ServerDeps, d: DeviceLights, start: number)
     await deviceRequest(deps, target, "/json/state", { method: "POST", body: { seg: [...deletes, flash] } });
     deps.lights.startFlash(row.id, async () => {
       await deps.lights.run(row.id, async () => {
-        if (newest()) await deleteFlashes(deps, row, false);
+        if (newest()) await deleteFlashesOf(deps, row, false);
       });
     });
   });
 }
 
+/** Sends one layout write and returns the device's lights as they are after it. */
+export type SendLayout = (write: LayoutWrite) => Promise<DeviceLights>;
+
 /**
- * Sends a layout write: each `seg` request, then the paint, by segment start and name
- * after a fresh read of the state. It remembers the paint, restarts the
- * startup timer, and returns the device's lights as they are now.
+ * Runs a layout change as one turn of the device queue, so no other write can
+ * change the device between the read a plan is made from and the plan's requests.
+ * In turn it reads the device, refuses a matrix (`refuseMatrix`), clears the
+ * leftovers, and calls `edit` with the lights and `send`. `send` posts each `seg`
+ * request, then the paint, by segment start and name after a fresh read of the
+ * state, remembers the paint, and reads the device again. After a `send`, even a
+ * failed one, the startup timer restarts.
  */
-export async function writeLayout(deps: ServerDeps, d: DeviceLights, write: LayoutWrite): Promise<DeviceLights> {
-  const target = targetOf(d.row);
+export async function writeLayout<T>(deps: ServerDeps, row: DeviceRow, edit: (d: DeviceLights, send: SendLayout) => Promise<T>): Promise<T> {
+  const target = targetOf(row);
   let sent = false;
   const post = async (body: Json): Promise<void> => {
-    sent = true;
     await deviceRequest(deps, target, "/json/state", { method: "POST", body });
   };
-  try {
-    await deps.lights.run(d.row.id, async () => {
-      for (const seg of write.seg) await post({ seg });
-      if (write.paint.length === 0) return;
+  const send = async (d: DeviceLights, write: LayoutWrite): Promise<DeviceLights> => {
+    sent = true;
+    for (const seg of write.seg) await post({ seg });
+    if (write.paint.length > 0) {
       const state = parseState(await deviceRequest<unknown>(deps, target, "/json/state"));
       const byKey = new Map(state.seg.filter((s) => s.n !== undefined).map((s) => [paintKey(s.start, s.n!), s]));
       if (write.paint.some((p) => !byKey.has(paintKey(p.start, p.name)))) throw new ApiError(409, "strand_changed", messages.strandChanged());
       // Remembered before it is sent: after a failed chunk the next save then writes the new paint, never the old.
       deps.lights.rememberPaint(
-        d.row.id,
+        row.id,
         Object.fromEntries(write.paint.map((p) => [paintKey(p.start, p.name), decodePaint(p.i, byKey.get(paintKey(p.start, p.name))!.stop - p.start)])),
       );
       for (const p of write.paint) {
         const id = byKey.get(paintKey(p.start, p.name))!.id;
         for (const i of splitRuns(p.i, (part) => ({ seg: { id, i: part } }), d.info.arch)) await post({ seg: { id, i } });
       }
+    }
+    return readDeviceLights(deps, row);
+  };
+  try {
+    return await deps.lights.run(row.id, async () => {
+      const read = await readDeviceLights(deps, row);
+      refuseMatrix(read);
+      let d = await clear(deps, read, async () => (deps.lights.flashActive(row.id) ? read.state : deleteFlashesOf(deps, row, true)));
+      return edit(d, async (write) => (d = await send(d, write)));
     });
-  } catch (err) {
-    if (sent) deps.lights.afterWrite(d.row);
-    throw err;
+  } finally {
+    if (sent) deps.lights.afterWrite(row);
   }
-  deps.lights.afterWrite(d.row);
-  return readDeviceLights(deps, d.row);
 }
 
 /**
