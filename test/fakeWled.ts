@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { AddressInfo, Socket } from "node:net";
 import { Readable } from "node:stream";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
@@ -57,7 +58,7 @@ export type FakeWled = {
 
 type Json = Record<string, unknown>;
 
-const fixture = (name: string): string => readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8");
+const fixture = (name: string): string => readFileSync(join(import.meta.dirname, "fixtures", name), "utf8");
 const isObject = (v: unknown): v is Json => typeof v === "object" && v !== null && !Array.isArray(v);
 const clone = <T>(v: T): T => structuredClone(v);
 

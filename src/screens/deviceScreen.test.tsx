@@ -1,12 +1,21 @@
 // @vitest-environment jsdom
 import "@/lib/reactCompat"
-import { afterEach, beforeEach, expect, it, vi } from "vitest"
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { Provider } from "react-redux"
 import { MemoryRouter, Route, Routes } from "react-router-dom"
 import type { Device, LightsView, WledInfo } from "../../shared/apiTypes"
 import { makeStore, reducers } from "@/store"
 import { routes } from "@/router"
+import { startFakeWled, type FakeWled } from "../../test/fakeWled"
+import { seeds } from "../../test/fixtures/seeds"
+import { psaves } from "../../test/lightsRuntime"
+import { makeTestApp } from "../../test/testApp"
+
+const realFetch = globalThis.fetch
+// jsdom replaces AbortSignal, and Node's fetch rejects the replacement, so a device request gets its time limit from a race instead of a signal.
+const withLimit = <T,>(p: Promise<T>, ms: number) =>
+  Promise.race([p, new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timed out")), ms))])
 
 const backyard: Device = {
   id: "d1",
@@ -218,4 +227,111 @@ it("turns the lights off at once and rolls back with a toast on an error", async
   await flush()
   expect(screen.getByRole("switch").getAttribute("aria-checked")).toBe("true")
   expect(screen.getByText("Couldn't change the lights")).toBeTruthy()
+})
+
+describe("seam", () => {
+  let fake: FakeWled
+
+  afterEach(async () => {
+    await fake?.close()
+  })
+
+  type Seg = { n?: string; start: number; stop: number; grp?: number; spc?: number; frz?: boolean }
+  const segs = () => fake.state.seg as Seg[]
+  const o0 = () => segs().filter((s) => s.stop <= 150).map((s) => s.n)
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+  const click = async (el: HTMLElement) => {
+    fireEvent.click(el)
+    await flush()
+  }
+
+  // Backyard on a real app server and a fake device; the browser's `/api` calls go to the server in process.
+  async function boot() {
+    const t = makeTestApp({ startupDelayMs: 50 })
+    fake = await startFakeWled(seeds.backyard)
+    const row = t.addFake(fake, seeds.backyard)
+    vi.stubGlobal("matchMedia", () => ({ matches: true, addEventListener: () => {}, removeEventListener: () => {} }))
+    vi.stubGlobal("fetch", async (input: string | URL, init: RequestInit = {}) => {
+      // The server passes a (jsdom) URL object; Node's fetch takes its string.
+      const url = String(input)
+      if (!url.startsWith("/")) return withLimit(realFetch(url, { ...init, signal: undefined }), t.deps.config.deviceTimeoutMs)
+      const res = await t.inject({ method: (init.method ?? "GET") as "GET", url, headers: init.headers as Record<string, string>, payload: init.body as string | undefined })
+      return new Response(res.statusCode === 204 ? null : res.body, { status: res.statusCode, headers: res.headers as Record<string, string> })
+    })
+    return row
+  }
+  const openRange = async (n: number) => {
+    const header = screen.getByRole("button", { name: new RegExp(`^Range ${n} LEDs`) })
+    if (header.getAttribute("aria-expanded") !== "true") await click(header)
+  }
+  const settle = (fn: () => void) => waitFor(fn, { timeout: 3000 })
+
+  // Fails if a seam between the tabs, the store, the routes, the layout writer or the startup preset breaks.
+  it("drives the lights and presets tabs against the server and a fake device", async () => {
+    const row = await boot()
+    render(
+      <Provider store={makeStore(reducers)}>
+        <MemoryRouter initialEntries={[`/devices/${row.id}`]}>
+          <Routes>
+            {routes.map((r, i) => (r.index ? <Route key={i} index element={r.element} /> : <Route key={i} path={r.path} element={r.element} />))}
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    )
+    await screen.findByText(/share one segment/)
+
+    await click(screen.getByRole("button", { name: "Split by strand" }))
+    await settle(() => expect(segs().map((s) => [s.start, s.stop])).toEqual([[0, 150], [150, 300]]))
+
+    const far = JSON.stringify(segs().filter((s) => s.start >= 150))
+    await click(screen.getByRole("button", { name: "Add range" }))
+    await settle(() => expect(o0()).toContain("Range 2"))
+    expect(segs().find((s) => s.n === "Range 2")!.stop).toBeLessThanOrEqual(150)
+    expect(JSON.stringify(segs().filter((s) => s.start >= 150))).toBe(far)
+
+    await openRange(1)
+    await click(screen.getByRole("button", { name: "Every N" }))
+    await settle(() => expect(o0().sort()).toEqual(["Range 1 1/2", "Range 1 2/2", "Range 2"]))
+    for (const s of segs().filter((x) => x.n?.startsWith("Range 1 "))) expect([s.grp, s.spc]).toEqual([1, 1])
+
+    await sleep(200)
+    // A slow step can let the 50 ms timer fire between two writes, so the count is not pinned.
+    await settle(() => expect(psaves(fake).length).toBeGreaterThan(0))
+    expect((psaves(fake).at(-1)!.body as { bootps?: number }).bootps).toBe(250)
+    expect(Object.keys(await (await realFetch(`http://127.0.0.1:${fake.port}/presets.json`)).json())).toContain("250")
+
+    await click(screen.getByRole("tab", { name: "Presets" }))
+    await click(await screen.findByRole("button", { name: /^Save scene/ }))
+    const dlg = () => screen.getByRole("dialog")
+    fireEvent.change(within(dlg()).getByLabelText("Name"), { target: { value: "Two" } })
+    await click(within(dlg()).getByRole("button", { name: "Save scene" }))
+    await screen.findByText("Saved Two")
+
+    await click(screen.getByRole("tab", { name: "Lights" }))
+    fireEvent.keyDown(screen.getByRole("button", { name: "Range 1 options" }), { key: "Enter" })
+    await click(await screen.findByRole("menuitem", { name: "Merge with next" }))
+    await settle(() => expect(segs().find((s) => s.n === "Range 1 1/2")?.stop).toBe(150))
+
+    await click(screen.getByRole("tab", { name: "Presets" }))
+    await click(await screen.findByRole("button", { name: "Apply" }))
+    await screen.findByText("Applied Two")
+    expect(o0().sort()).toEqual(["Range 1 1/2", "Range 1 2/2", "Range 2"])
+
+    await click(screen.getByRole("tab", { name: "Lights" }))
+    await openRange(2)
+    await click(screen.getAllByRole("button", { name: "Individual" }).at(-1)!)
+    await click(await screen.findByRole("button", { name: "Fill range" }))
+    await settle(() => expect(segs().find((s) => s.n === "Range 2 paint")?.frz).toBe(true))
+    const id = segs().findIndex((s) => s.n === "Range 2 paint")
+    const px = fake.pixels(id)
+    expect(px.length).toBeGreaterThan(0)
+    expect(new Set(px.map((c) => c?.toUpperCase().replace("#", "")))).toEqual(new Set(["FF8800"]))
+
+    fake.setMode("timeout")
+    const handle = screen.getByRole("slider", { name: /^Boundary between/ })
+    const before = handle.getAttribute("aria-valuenow")
+    fireEvent.keyDown(handle, { key: "ArrowRight" })
+    await screen.findByText("Couldn't change the lights", {}, { timeout: 3000 })
+    await settle(() => expect(screen.getByRole("slider", { name: /^Boundary between/ }).getAttribute("aria-valuenow")).toBe(before))
+  }, 30_000)
 })
